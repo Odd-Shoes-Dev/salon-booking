@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+:root {
+  --brand: #2563EB;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+/* Print styles for receipt */
+@media print {
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  body { background: white; }
+}
