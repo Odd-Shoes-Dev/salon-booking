@@ -55,18 +55,18 @@ export async function POST(request: NextRequest) {
     if (!service) return NextResponse.json({ error: 'Service not found.' }, { status: 404 });
 
     // Verify staff belongs to this salon — or auto-assign one if "Any Staff" selected
-    let worker: { id: string; name: string } | null = null;
+    let worker: { id: string; name: string; branch_id: string | null } | null = null;
     if (staff_id) {
       const [found] = await sql`
-        SELECT id, name FROM workers
+        SELECT id, name, branch_id FROM workers
         WHERE id = ${staff_id} AND salon_id = ${salon.id} AND is_active = true
       `;
       if (!found) return NextResponse.json({ error: 'Staff member not found.' }, { status: 404 });
-      worker = found as { id: string; name: string };
+      worker = found as { id: string; name: string; branch_id: string | null };
     } else {
       // Pick any active worker who is free at this time
       const [found] = await sql`
-        SELECT id, name FROM workers
+        SELECT id, name, branch_id FROM workers
         WHERE salon_id = ${salon.id} AND is_active = true
           AND id NOT IN (
             SELECT staff_id FROM bookings
@@ -80,9 +80,10 @@ export async function POST(request: NextRequest) {
         LIMIT 1
       `;
       if (!found) return NextResponse.json({ error: 'No staff available at that time. Please try a different slot.' }, { status: 409 });
-      worker = found as { id: string; name: string };
+      worker = found as { id: string; name: string; branch_id: string | null };
     }
     const assignedStaffId = worker.id;
+    const assignedBranchId = worker.branch_id;
 
     // Check slot is still free for the assigned staff (prevent race condition)
     const conflict = await sql`
@@ -119,15 +120,15 @@ export async function POST(request: NextRequest) {
     // Generate booking number
     const bookingNumber = await generateBookingNumber(salon.id, salon.subdomain ?? subdomain);
 
-    // Create booking
+    // Create booking — branch_id is inferred from the assigned worker's branch
     const [booking] = await sql`
       INSERT INTO bookings (
-        salon_id, guest_name, guest_phone,
+        salon_id, branch_id, guest_name, guest_phone,
         staff_id, service_id,
         booking_date, start_time, end_time,
         status, notes, booking_number
       ) VALUES (
-        ${salon.id}, ${guest_name.trim()}, ${guest_phone.trim()},
+        ${salon.id}, ${assignedBranchId}, ${guest_name.trim()}, ${guest_phone.trim()},
         ${assignedStaffId}, ${service_id},
         ${booking_date}, ${start_time}, ${end_time},
         'pending', ${notes?.trim() || null}, ${bookingNumber}
