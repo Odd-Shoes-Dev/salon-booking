@@ -1,10 +1,9 @@
 /**
- * Minimal SMS helper — mirrors src/lib/esms.ts in the main system.
- * All SMS are optional; if ESMS_API_KEY is not set, notifications are skipped silently.
+ * Minimal SMS helper — mirrors src/lib/sms in the main system, which picks a
+ * provider via SMS_PROVIDER so the website stays in sync when the salon
+ * switches providers there. All SMS are optional; if the active provider's
+ * credentials aren't set, notifications are skipped silently.
  */
-
-const ESMS_BASE_URL = process.env.ESMS_BASE_URL ?? 'https://sms.esmsafrica.io';
-const ESMS_API_KEY  = process.env.ESMS_API_KEY  ?? '';
 
 function normalizePhone(phone: string): string {
   const trimmed = phone.trim();
@@ -25,18 +24,58 @@ function toGsm7Safe(text: string): string {
     .replace(/[^\x20-\x7E\n\r]/g, '');
 }
 
-async function sendSms(to: string, text: string): Promise<void> {
-  if (!ESMS_API_KEY) return; // SMS not configured — skip silently
+async function sendViaEsms(to: string, text: string): Promise<void> {
+  const baseUrl = process.env.ESMS_BASE_URL ?? 'https://sms.esmsafrica.io';
+  const apiKey  = process.env.ESMS_API_KEY  ?? '';
+  if (!apiKey) return; // SMS not configured — skip silently
 
+  await fetch(`${baseUrl}/api/messages/send`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ to: normalizePhone(to), text: toGsm7Safe(text) }),
+  });
+}
+
+async function sendViaAfricasTalking(to: string, text: string): Promise<void> {
+  const apiKey   = process.env.AT_API_KEY   ?? '';
+  const username = process.env.AT_USERNAME  ?? '';
+  const senderId = process.env.AT_SENDER_ID ?? '';
+  if (!apiKey || !username) return; // SMS not configured — skip silently
+
+  const payload: Record<string, unknown> = {
+    username,
+    phoneNumbers: [normalizePhone(to)],
+    message: text,
+  };
+  if (senderId) payload.senderId = senderId;
+
+  const res = await fetch('https://api.africastalking.com/version1/messaging/bulk', {
+    method: 'POST',
+    headers: {
+      apiKey,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.SMSMessageData?.Message ?? `AT send failed (HTTP ${res.status})`);
+  }
+}
+
+async function sendSms(to: string, text: string): Promise<void> {
+  const provider = (process.env.SMS_PROVIDER ?? 'esms').toLowerCase();
   try {
-    await fetch(`${ESMS_BASE_URL}/api/messages/send`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${ESMS_API_KEY}`,
-      },
-      body: JSON.stringify({ to: normalizePhone(to), text: toGsm7Safe(text) }),
-    });
+    if (provider === 'africastalking') {
+      await sendViaAfricasTalking(to, text);
+    } else {
+      await sendViaEsms(to, text);
+    }
   } catch {
     // SMS failure must never break the booking flow
   }
