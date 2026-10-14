@@ -19,16 +19,27 @@ export async function getAvailableSlots(
 ): Promise<AvailableSlot[]> {
   // 1. Booking settings
   const [settings] = await sql`
-    SELECT working_hours_start, working_hours_end, buffer_minutes
+    SELECT working_hours_start, working_hours_end, buffer_minutes, min_advance_minutes
     FROM booking_settings
     WHERE salon_id = ${salonId}
   `;
 
-  const workStart = settings?.working_hours_start ?? '09:00';
-  const workEnd   = settings?.working_hours_end   ?? '18:00';
-  const buffer    = settings?.buffer_minutes       ?? 15;
+  const workStart  = settings?.working_hours_start ?? '09:00';
+  const workEnd    = settings?.working_hours_end   ?? '18:00';
+  const buffer     = settings?.buffer_minutes       ?? 15;
+  const minAdvance = settings?.min_advance_minutes  ?? 60;
 
-  const dayOfWeek = new Date(date).getDay(); // 0 = Sunday
+  // Parse as local calendar date, not UTC — new Date('YYYY-MM-DD') parses as UTC
+  // midnight, which can shift the weekday by one depending on the server's own
+  // timezone and misalign staff_schedules.day_of_week.
+  const [dy, dm, dd] = date.split('-').map(Number);
+  const dayOfWeek = new Date(dy, dm - 1, dd).getDay(); // 0 = Sunday
+
+  // Same-day cutoff, computed in East Africa Time regardless of server timezone
+  const now = new Date();
+  const localNow  = new Date(now.toLocaleString('en-US', { timeZone: 'Africa/Nairobi' }));
+  const localDate = localNow.toISOString().split('T')[0];
+  if (date < localDate) return []; // fully past date
 
   // 2. Load eligible staff for this day
   let eligibleStaff: { id: string; name: string }[] = [];
@@ -93,7 +104,13 @@ export async function getAvailableSlots(
     return `${h}:${m}`;
   };
 
+  const isToday = date === localDate;
+  const currentMin = isToday ? localNow.getHours() * 60 + localNow.getMinutes() : 0;
+
   for (let slotStart = workStartMin; slotStart + serviceDurationMinutes <= workEndMin; slotStart += slotStep) {
+    // Skip slots inside today's minimum-advance-notice window
+    if (isToday && slotStart < currentMin + minAdvance) continue;
+
     const slotEnd    = slotStart + serviceDurationMinutes;
     const slotEndBuf = slotEnd + buffer;
 

@@ -18,16 +18,6 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'serviceDuration param required' }, { status: 400 });
     }
 
-    // Enforce 48-hour minimum for self-bookings
-    const minDate = new Date();
-    minDate.setMinutes(minDate.getMinutes() + 2880); // +48h
-    if (new Date(date) < new Date(minDate.toISOString().slice(0, 10))) {
-      return NextResponse.json(
-        { error: 'Self-bookings require at least 48 hours notice. Please call us for sooner appointments.' },
-        { status: 400 }
-      );
-    }
-
     const host      = request.headers.get('x-custom-domain') ?? '';
     const subdomain = request.headers.get('x-salon-subdomain') ?? 'posh';
     const salon     = host

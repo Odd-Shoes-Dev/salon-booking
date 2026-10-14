@@ -59,17 +59,9 @@ export async function POST(
       );
     }
 
-    // 48-hour minimum on new date
-    const minDate = new Date();
-    minDate.setMinutes(minDate.getMinutes() + 2880);
-    if (new Date(new_date) < new Date(minDate.toISOString().slice(0, 10))) {
-      return NextResponse.json(
-        { error: 'New date must be at least 48 hours from now.' },
-        { status: 400 }
-      );
-    }
-
-    // Check the new slot is free
+    // Check the new slot is free — getAvailableSlots enforces the salon's
+    // configured minimum advance notice internally, so a too-soon slot simply
+    // won't appear here.
     const [service] = await sql`SELECT duration_minutes FROM services WHERE id = ${booking.service_id}`;
     const slots = await getAvailableSlots(
       salon.id, new_date, service?.duration_minutes ?? 60, booking.staff_id

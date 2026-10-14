@@ -30,22 +30,38 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid date format.' }, { status: 400 });
     }
 
-    // 48-hour minimum check
-    const minDate = new Date();
-    minDate.setMinutes(minDate.getMinutes() + 2880);
-    if (new Date(booking_date) < new Date(minDate.toISOString().slice(0, 10))) {
-      return NextResponse.json(
-        { error: 'Bookings require at least 48 hours notice. For sooner appointments please call us directly.' },
-        { status: 400 }
-      );
-    }
-
     const host      = request.headers.get('x-custom-domain') ?? '';
     const subdomain = request.headers.get('x-salon-subdomain') ?? 'posh';
     const salon     = host
       ? await getSalonByDomain(host)
       : await getSalonBySubdomain(subdomain);
     if (!salon) return NextResponse.json({ error: 'Salon not found' }, { status: 404 });
+
+    // Minimum advance notice — configurable per salon (booking_settings.min_advance_minutes),
+    // checked precisely in East Africa Time regardless of server timezone.
+    const [settings] = await sql`SELECT min_advance_minutes FROM booking_settings WHERE salon_id = ${salon.id}`;
+    const minAdvance = settings?.min_advance_minutes ?? 60;
+
+    const now = new Date();
+    const localNow  = new Date(now.toLocaleString('en-US', { timeZone: 'Africa/Nairobi' }));
+    const localDate = localNow.toISOString().split('T')[0];
+    const currentMin = localNow.getHours() * 60 + localNow.getMinutes();
+
+    const [by, bm, bd] = booking_date.split('-').map(Number);
+    const [ly, lm, ld] = localDate.split('-').map(Number);
+    const dayDiff = Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ly, lm - 1, ld)) / 86400000);
+
+    if (dayDiff < 0) {
+      return NextResponse.json({ error: 'Cannot book a date in the past.' }, { status: 400 });
+    }
+    const [sh, sm] = start_time.split(':').map(Number);
+    const requestedMin = dayDiff * 1440 + sh * 60 + sm;
+    if (requestedMin < currentMin + minAdvance) {
+      return NextResponse.json(
+        { error: `Bookings require at least ${minAdvance} minutes notice. For sooner appointments please call us directly.` },
+        { status: 400 }
+      );
+    }
 
     // Verify service belongs to this salon
     const [service] = await sql`

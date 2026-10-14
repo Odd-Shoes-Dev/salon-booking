@@ -10,10 +10,11 @@ interface TimeSlot { startTime: string; endTime: string }
 
 type Step = 1 | 2 | 3;
 
+// Local calendar date, not UTC — avoids the day shifting near midnight
+// depending on the browser's own timezone.
 function getMinDate(): string {
   const d = new Date();
-  d.setDate(d.getDate() + 2);
-  return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function formatDate(iso: string): string {
@@ -324,7 +325,6 @@ export default function BookingForm({ salon, initialServices }: Props) {
             {/* Inline calendar */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
               <h2 className="text-sm font-semibold text-slate-700 mb-4">Pick a Date</h2>
-              <p className="text-xs text-slate-400 mb-4">Bookings require at least 48 hours notice.</p>
               <div className="flex items-center justify-between mb-4">
                 <button
                   onClick={() => {

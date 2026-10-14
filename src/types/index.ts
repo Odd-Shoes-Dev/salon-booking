@@ -56,7 +56,7 @@ export interface BookingSettings {
   is_enabled: boolean;
   buffer_minutes: number;
   advance_booking_days: number;
-  min_advance_minutes: number;  // 2880 = 48 hours for self-booking
+  min_advance_minutes: number;  // minutes of notice required before a slot; default 60
   cancellation_hours: number;
   working_hours_start: string;
   working_hours_end: string;
