@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
 import { getSalonByDomain, getSalonBySubdomain } from '@/lib/tenants';
 import { getAvailableSlots } from '@/lib/slots';
+import { hoursUntilEAT } from '@/lib/time';
 
 // POST /api/bookings/[bookingNumber]/reschedule
 // Body: { guest_phone, new_date, new_start_time, new_end_time }
@@ -50,8 +51,7 @@ export async function POST(
       SELECT cancellation_hours FROM booking_settings WHERE salon_id = ${salon.id}
     `;
     const cancellationHours = settings?.cancellation_hours ?? 24;
-    const originalDateTime = new Date(`${booking.booking_date}T${booking.start_time}`);
-    const hoursUntil = (originalDateTime.getTime() - Date.now()) / 3_600_000;
+    const hoursUntil = hoursUntilEAT(booking.booking_date, booking.start_time);
     if (hoursUntil <= cancellationHours) {
       return NextResponse.json(
         { error: `Reschedules must be made at least ${cancellationHours} hours before the appointment.` },

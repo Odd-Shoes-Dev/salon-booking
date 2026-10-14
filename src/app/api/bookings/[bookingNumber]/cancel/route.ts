@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
 import { getSalonByDomain, getSalonBySubdomain } from '@/lib/tenants';
 import { sendCancellationSms } from '@/lib/sms';
+import { hoursUntilEAT } from '@/lib/time';
 
 // POST /api/bookings/[bookingNumber]/cancel
 // Body: { guest_phone, reason? }
@@ -45,8 +46,7 @@ export async function POST(
       SELECT cancellation_hours FROM booking_settings WHERE salon_id = ${salon.id}
     `;
     const cancellationHours = settings?.cancellation_hours ?? 24;
-    const bookingDateTime = new Date(`${booking.booking_date}T${booking.start_time}`);
-    const hoursUntil = (bookingDateTime.getTime() - Date.now()) / 3_600_000;
+    const hoursUntil = hoursUntilEAT(booking.booking_date, booking.start_time);
     if (hoursUntil <= cancellationHours) {
       return NextResponse.json(
         { error: `Cancellations must be made at least ${cancellationHours} hours before the appointment. Please call us directly.` },

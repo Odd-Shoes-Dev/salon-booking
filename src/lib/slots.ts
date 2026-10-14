@@ -5,10 +5,13 @@ import type { AvailableSlot } from '@/types';
  * Returns available time slots for a given salon + date + optional staff filter.
  *
  * Logic:
- *  1. Load booking_settings for the salon (working hours, buffer, slot duration)
- *  2. If staffId provided, load that staff member's schedule for the day
- *  3. Generate all potential slots between working_hours_start and working_hours_end
- *  4. For each slot, subtract already-confirmed/pending bookings (which occupy start_time→end_time)
+ *  1. Load booking_settings for the salon (fallback working hours, buffer, min notice)
+ *  2. Load each eligible staff member's OWN schedule for the day (start/end/availability),
+ *     falling back to the salon's working hours only for staff with no schedule row —
+ *     mirrors the main system's per-staff availability logic exactly.
+ *  3. Generate potential slots across the union of all staff windows
+ *  4. For each slot, keep only staff whose own window covers it and who have no
+ *     conflicting booking (existing bookings ± buffer)
  *  5. Return only slots where at least one staff member is free for the full service duration
  */
 export async function getAvailableSlots(
@@ -17,15 +20,16 @@ export async function getAvailableSlots(
   serviceDurationMinutes: number,
   staffId?: string
 ): Promise<AvailableSlot[]> {
-  // 1. Booking settings
+  // 1. Booking settings — fallback working hours only, used when a staff member
+  // has no schedule row for this day (same defaults as the main system).
   const [settings] = await sql`
     SELECT working_hours_start, working_hours_end, buffer_minutes, min_advance_minutes
     FROM booking_settings
     WHERE salon_id = ${salonId}
   `;
 
-  const workStart  = settings?.working_hours_start ?? '09:00';
-  const workEnd    = settings?.working_hours_end   ?? '18:00';
+  const fallbackStart = settings?.working_hours_start ?? '07:00';
+  const fallbackEnd    = settings?.working_hours_end   ?? '23:00';
   const buffer     = settings?.buffer_minutes       ?? 15;
   const minAdvance = settings?.min_advance_minutes  ?? 60;
 
@@ -41,40 +45,33 @@ export async function getAvailableSlots(
   const localDate = localNow.toISOString().split('T')[0];
   if (date < localDate) return []; // fully past date
 
-  // 2. Load eligible staff for this day
-  let eligibleStaff: { id: string; name: string }[] = [];
-  if (staffId) {
-    const [sched] = await sql`
-      SELECT w.id, w.name FROM staff_schedules ss
-      JOIN workers w ON w.id = ss.staff_id
-      WHERE ss.staff_id = ${staffId}
-        AND ss.salon_id = ${salonId}
-        AND ss.day_of_week = ${dayOfWeek}
-        AND ss.is_available = true
-        AND w.is_active = true
-    `;
-    if (sched) eligibleStaff = [{ id: sched.id, name: sched.name }];
-  } else {
-    const rows = await sql`
-      SELECT DISTINCT w.id, w.name FROM staff_schedules ss
-      JOIN workers w ON w.id = ss.staff_id
-      WHERE ss.salon_id = ${salonId}
-        AND ss.day_of_week = ${dayOfWeek}
-        AND ss.is_available = true
-        AND w.is_active = true
-    `;
-    eligibleStaff = rows.map(r => ({ id: r.id, name: r.name }));
+  // 2. Load staff with their own schedule for this day (LEFT JOIN — a worker with
+  // no schedule row for today still gets a slot window via the fallback below).
+  const staffRows = await sql`
+    SELECT w.id, w.name,
+           sch.start_time::text AS start_time, sch.end_time::text AS end_time,
+           sch.is_available
+    FROM workers w
+    LEFT JOIN staff_schedules sch
+      ON sch.staff_id = w.id AND sch.salon_id = ${salonId} AND sch.day_of_week = ${dayOfWeek}
+    WHERE w.salon_id  = ${salonId}
+      AND w.is_active = true
+      AND (${staffId ?? null}::uuid IS NULL OR w.id = ${staffId ?? null}::uuid)
+  `;
 
-    // No schedules configured yet — fall back to all active workers (same as POS)
-    if (eligibleStaff.length === 0) {
-      const allWorkers = await sql`
-        SELECT id, name FROM workers
-        WHERE salon_id = ${salonId} AND is_active = true
-        ORDER BY name
-      `;
-      eligibleStaff = allWorkers.map(r => ({ id: r.id, name: r.name }));
-    }
-  }
+  const toMin = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+
+  const eligibleStaff = (staffRows as { id: string; name: string; start_time: string | null; end_time: string | null; is_available: boolean | null }[])
+    .filter(st => st.is_available !== false) // explicitly off today → excluded; no schedule row → still eligible
+    .map(st => ({
+      id: st.id,
+      name: st.name,
+      startMin: toMin(st.start_time ?? fallbackStart),
+      endMin:   toMin(st.end_time   ?? fallbackEnd),
+    }));
 
   if (eligibleStaff.length === 0) return [];
 
@@ -89,14 +86,12 @@ export async function getAvailableSlots(
       AND status IN ('pending', 'confirmed')
   `;
 
-  // 4. Generate slots (30-minute increments)
+  // 4. Generate slots (30-minute increments) across the union of all staff windows
   const slots: AvailableSlot[] = [];
   const slotStep = 30; // minutes between slot start times
 
-  const [wsh, wsm]  = workStart.split(':').map(Number);
-  const [weh, wem]  = workEnd.split(':').map(Number);
-  const workStartMin = wsh * 60 + wsm;
-  const workEndMin   = weh * 60 + wem;
+  const overallStart = Math.min(...eligibleStaff.map(s => s.startMin));
+  const overallEnd   = Math.max(...eligibleStaff.map(s => s.endMin));
 
   const toHHMM = (totalMin: number) => {
     const h = Math.floor(totalMin / 60).toString().padStart(2, '0');
@@ -107,21 +102,20 @@ export async function getAvailableSlots(
   const isToday = date === localDate;
   const currentMin = isToday ? localNow.getHours() * 60 + localNow.getMinutes() : 0;
 
-  for (let slotStart = workStartMin; slotStart + serviceDurationMinutes <= workEndMin; slotStart += slotStep) {
+  for (let slotStart = overallStart; slotStart + serviceDurationMinutes <= overallEnd; slotStart += slotStep) {
     // Skip slots inside today's minimum-advance-notice window
     if (isToday && slotStart < currentMin + minAdvance) continue;
 
     const slotEnd    = slotStart + serviceDurationMinutes;
     const slotEndBuf = slotEnd + buffer;
 
-    // Find staff free for this slot
+    // Find staff whose own schedule covers this slot and who have no conflict
     const freeStaff = eligibleStaff.filter(staff => {
+      if (slotStart < staff.startMin || slotEnd > staff.endMin) return false;
       return !existingBookings.some(b => {
         if (b.staff_id !== staff.id) return false;
-        const [bsh, bsm] = (b.start_time as string).split(':').map(Number);
-        const [beh, bem] = (b.end_time   as string).split(':').map(Number);
-        const bStart = bsh * 60 + bsm;
-        const bEnd   = beh * 60 + bem;
+        const bStart = toMin(b.start_time as string);
+        const bEnd   = toMin(b.end_time   as string);
         // Overlap check: slot conflicts if not entirely before or after the booking+buffer
         return slotStart < bEnd + buffer && slotEndBuf > bStart;
       });
@@ -131,7 +125,7 @@ export async function getAvailableSlots(
       slots.push({
         startTime: toHHMM(slotStart),
         endTime:   toHHMM(slotEnd),
-        availableStaff: freeStaff,
+        availableStaff: freeStaff.map(s => ({ id: s.id, name: s.name })),
       });
     }
   }
