@@ -8,6 +8,14 @@ import type { Salon, Service } from '@/types';
 interface Worker   { id: string; name: string }
 interface TimeSlot { startTime: string; endTime: string }
 
+interface ServiceLine {
+  service: Service;
+  worker: Worker | null;
+  slot: TimeSlot | null;
+  slots: TimeSlot[];
+  loadingSlots: boolean;
+}
+
 type Step = 1 | 2 | 3;
 
 // Local calendar date, not UTC — avoids the day shifting near midnight
@@ -40,19 +48,16 @@ export default function BookingForm({ salon, initialServices }: Props) {
 
   const [step, setStep] = useState<Step>(1);
 
-  const [date,    setDate]    = useState('');
-  const [service, setService] = useState<Service | null>(null);
+  const [date, setDate] = useState('');
+  const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
-  const [worker,  setWorker]  = useState<Worker | null>(null);
-  const [slots,   setSlots]   = useState<TimeSlot[]>([]);
-  const [slot,    setSlot]    = useState<TimeSlot | null>(null);
+  const [lines, setLines] = useState<ServiceLine[]>([]);
 
   const [name,    setName]    = useState('');
   const [phone,   setPhone]   = useState('');
   const [notes,   setNotes]   = useState('');
 
   const [loadingWorkers, setLoadingWorkers] = useState(false);
-  const [loadingSlots,   setLoadingSlots]   = useState(false);
   const [loading,        setLoading]        = useState(false);
 
   // Service search / filter
@@ -118,7 +123,36 @@ export default function BookingForm({ salon, initialServices }: Props) {
   const minDateYear  = Number(minDate.slice(0, 4));
   const minDateMonth = Number(minDate.slice(5, 7)) - 1; // 0-indexed
 
-  // Fetch workers when step 2 and a date is chosen
+  const totalPrice    = useMemo(() => selectedServices.reduce((sum, s) => sum + Number(s.price), 0), [selectedServices]);
+  const totalDuration = useMemo(() => selectedServices.reduce((sum, s) => sum + s.duration_minutes, 0), [selectedServices]);
+
+  const toggleService = (s: Service) => {
+    setSelectedServices(prev =>
+      prev.some(p => p.id === s.id) ? prev.filter(p => p.id !== s.id) : [...prev, s]
+    );
+  };
+
+  // Keep `lines` in sync with the selected-services cart, preserving existing
+  // staff/time picks for services that are still selected.
+  useEffect(() => {
+    setLines(prev => selectedServices.map(s => {
+      const existing = prev.find(l => l.service.id === s.id);
+      return existing ?? { service: s, worker: null, slot: null, slots: [], loadingSlots: false };
+    }));
+  }, [selectedServices]);
+
+  const setLineWorker = (idx: number, w: Worker | null) => {
+    setLines(prev => prev.map((l, i) => i === idx ? { ...l, worker: w, slot: null } : l));
+  };
+  const setLineSlot = (idx: number, s: TimeSlot) => {
+    setLines(prev => prev.map((l, i) => i === idx ? { ...l, slot: s } : l));
+  };
+  const onPickDate = (iso: string) => {
+    setDate(iso);
+    setLines(prev => prev.map(l => ({ ...l, worker: null, slot: null, slots: [] })));
+  };
+
+  // Fetch workers once per date (shared across all service lines)
   useEffect(() => {
     if (step !== 2 || !date) return;
     setLoadingWorkers(true);
@@ -128,19 +162,32 @@ export default function BookingForm({ salon, initialServices }: Props) {
       .catch(() => setLoadingWorkers(false));
   }, [step, date]);
 
-  // Fetch slots when step 2, date and service set; re-fetch when worker changes
+  // Fetch slots per line; re-fetch when date or that line's own staff changes
+  const lineDeps = lines.map(l => `${l.service.id}:${l.worker?.id ?? ''}`).join(',');
   useEffect(() => {
-    if (step !== 2 || !service || !date) return;
-    setLoadingSlots(true);
-    const url = `/api/slots/available?date=${date}&serviceDuration=${service.duration_minutes}${worker ? `&staffId=${worker.id}` : ''}`;
-    fetch(url)
-      .then(r => r.json())
-      .then(d => { setSlots(Array.isArray(d) ? d : []); setLoadingSlots(false); })
-      .catch(() => setLoadingSlots(false));
-  }, [step, date, service, worker]);
+    if (step !== 2 || !date || lines.length === 0) return;
+    lines.forEach((line, idx) => {
+      setLines(prev => prev.map((l, i) => i === idx ? { ...l, loadingSlots: true } : l));
+      const url = `/api/slots/available?date=${date}&serviceDuration=${line.service.duration_minutes}${line.worker ? `&staffId=${line.worker.id}` : ''}`;
+      fetch(url)
+        .then(r => r.json())
+        .then(d => {
+          const fresh: TimeSlot[] = Array.isArray(d) ? d : [];
+          setLines(prev => prev.map((l, i) => {
+            if (i !== idx) return l;
+            const keepSlot = l.slot && fresh.some(s => s.startTime === l.slot!.startTime);
+            return { ...l, slots: fresh, loadingSlots: false, slot: keepSlot ? l.slot : null };
+          }));
+        })
+        .catch(() => setLines(prev => prev.map((l, i) => i === idx ? { ...l, loadingSlots: false } : l)));
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, date, lineDeps]);
+
+  const allLinesReady = lines.length > 0 && lines.every(l => l.slot);
 
   const handleSubmit = useCallback(async () => {
-    if (!date || !service || !slot || !name.trim() || !phone.trim()) {
+    if (!date || !allLinesReady || !name.trim() || !phone.trim()) {
       toast.error('Please fill in all required fields.');
       return;
     }
@@ -152,22 +199,27 @@ export default function BookingForm({ salon, initialServices }: Props) {
         body: JSON.stringify({
           guest_name: name.trim(),
           guest_phone: phone.trim(),
-          service_id: service.id,
-          staff_id: worker?.id ?? null,
           booking_date: date,
-          start_time: slot.startTime,
-          end_time: slot.endTime,
           notes: notes.trim() || null,
+          services: lines.map(l => ({
+            service_id: l.service.id,
+            staff_id: l.worker?.id ?? null,
+            start_time: l.slot!.startTime,
+          })),
         }),
       });
       const data = await res.json();
       if (!res.ok) { toast.error(data.error ?? 'Failed to create booking.'); setLoading(false); return; }
-      router.push(`/booking/confirmation/${data.bookingNumber}`);
+      const numbers: string[] = data.bookingNumbers ?? (data.bookingNumber ? [data.bookingNumber] : []);
+      if (numbers.length === 0) { toast.error('Booking created but no reference was returned.'); setLoading(false); return; }
+      const [first, ...rest] = numbers;
+      const qs = rest.length > 0 ? `?also=${rest.join(',')}` : '';
+      router.push(`/booking/confirmation/${first}${qs}`);
     } catch {
       toast.error('Network error. Please try again.');
       setLoading(false);
     }
-  }, [date, service, worker, slot, name, phone, notes, router]);
+  }, [date, allLinesReady, lines, name, phone, notes, router]);
 
   const inputClass = 'w-full px-4 py-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--brand)] text-slate-900 bg-white';
   const labelClass = 'block text-sm font-medium text-slate-700 mb-2';
@@ -198,7 +250,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
       {/* Step indicator */}
       <div className="bg-white border-b border-slate-100 px-4 py-3">
         <div className="max-w-lg mx-auto flex gap-2 text-xs font-medium">
-          {(['Service', 'Schedule', 'Details'] as const).map((label, i) => {
+          {(['Services', 'Schedule', 'Details'] as const).map((label, i) => {
             const s = (i + 1) as Step;
             return (
               <div
@@ -217,13 +269,13 @@ export default function BookingForm({ salon, initialServices }: Props) {
         </div>
       </div>
 
-      <div className="max-w-lg mx-auto px-4 py-6">
+      <div className={`max-w-lg mx-auto px-4 py-6 ${step === 1 && selectedServices.length > 0 ? 'pb-28' : ''}`}>
 
-        {/* ── Step 1: Service ──────────────────────────────────────────────── */}
+        {/* ── Step 1: Services (multi-select cart) ─────────────────────────── */}
         {step === 1 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-            <h2 className="text-lg font-semibold text-slate-900 mb-1">Choose a Service</h2>
-            <p className="text-sm text-slate-500 mb-4">What would you like to have done?</p>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">Choose Services</h2>
+            <p className="text-sm text-slate-500 mb-4">Select one or more — tap to add or remove.</p>
 
             {/* Search */}
             <div className="relative mb-4">
@@ -275,9 +327,9 @@ export default function BookingForm({ salon, initialServices }: Props) {
                     <ServiceCard
                       key={s.id}
                       service={s}
-                      selected={service?.id === s.id}
+                      selected={selectedServices.some(p => p.id === s.id)}
                       showCategory={!activeCategory}
-                      onClick={() => { setService(s); setStep(2); }}
+                      onClick={() => toggleService(s)}
                     />
                   ))}
                 </div>
@@ -292,9 +344,9 @@ export default function BookingForm({ salon, initialServices }: Props) {
                         <ServiceCard
                           key={s.id}
                           service={s}
-                          selected={service?.id === s.id}
+                          selected={selectedServices.some(p => p.id === s.id)}
                           showCategory={false}
-                          onClick={() => { setService(s); setStep(2); }}
+                          onClick={() => toggleService(s)}
                         />
                       ))}
                     </div>
@@ -305,21 +357,31 @@ export default function BookingForm({ salon, initialServices }: Props) {
           </div>
         )}
 
-        {/* ── Step 2: Schedule (Date + Staff + Time on one page) ──────────────── */}
-        {step === 2 && service && (
+        {/* ── Step 2: Schedule (Date + per-service Staff/Time) ─────────────── */}
+        {step === 2 && lines.length > 0 && (
           <div className="space-y-4">
 
-            {/* Service summary chip */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-500 mb-0.5">Selected service</p>
-                <p className="font-semibold text-slate-900">{service.name}</p>
-                <p className="text-xs text-slate-500">{service.duration_minutes} min · UGX {Number(service.price).toLocaleString()}</p>
+            {/* Services summary */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-slate-500">Selected services</p>
+                <button
+                  onClick={() => setStep(1)}
+                  className="text-xs text-[var(--brand)] hover:underline"
+                >Change</button>
               </div>
-              <button
-                onClick={() => { setService(null); setDate(''); setWorker(null); setSlot(null); setStep(1); }}
-                className="text-xs text-[var(--brand)] hover:underline ml-4 shrink-0"
-              >Change</button>
+              <div className="space-y-1.5">
+                {selectedServices.map(s => (
+                  <div key={s.id} className="flex items-center justify-between text-sm">
+                    <span className="font-medium text-slate-900">{s.name}</span>
+                    <span className="text-slate-500">{s.duration_minutes} min · UGX {Number(s.price).toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-between pt-2 mt-2 border-t border-slate-100 text-sm font-semibold">
+                <span className="text-slate-700">Total</span>
+                <span className="text-[var(--brand)]">UGX {totalPrice.toLocaleString()}</span>
+              </div>
             </div>
 
             {/* Inline calendar */}
@@ -359,7 +421,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
                     <button
                       key={iso}
                       disabled={disabled}
-                      onClick={() => { setDate(iso); setWorker(null); setSlot(null); }}
+                      onClick={() => onPickDate(iso)}
                       className={`mx-auto w-9 h-9 rounded-full text-sm flex items-center justify-center transition-colors select-none
                         ${selected
                           ? 'bg-[var(--brand)] text-white font-semibold'
@@ -377,27 +439,30 @@ export default function BookingForm({ salon, initialServices }: Props) {
               )}
             </div>
 
-            {/* Staff — appears once a date is chosen */}
-            {date && (
-              <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-                <h2 className="text-sm font-semibold text-slate-700 mb-4">Choose a Staff Member</h2>
+            {/* Per-service staff + time pickers */}
+            {date && lines.map((line, idx) => (
+              <div key={line.service.id} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+                <h2 className="text-sm font-semibold text-slate-700 mb-1">{line.service.name}</h2>
+                <p className="text-xs text-slate-400 mb-4">{line.service.duration_minutes} min · UGX {Number(line.service.price).toLocaleString()}</p>
+
+                <p className="text-xs font-medium text-slate-500 mb-2">Staff</p>
                 {loadingWorkers ? (
-                  <div className="flex gap-2 flex-wrap">
+                  <div className="flex gap-2 flex-wrap mb-4">
                     {[1, 2, 3].map(i => <div key={i} className="h-9 w-24 rounded-lg bg-slate-100 animate-pulse" />)}
                   </div>
                 ) : (
-                  <div className="flex gap-2 flex-wrap">
+                  <div className="flex gap-2 flex-wrap mb-4">
                     <button
-                      onClick={() => { setWorker(null); setSlot(null); }}
+                      onClick={() => setLineWorker(idx, null)}
                       className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors
-                        ${worker === null ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
+                        ${line.worker === null ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
                     >Any Staff</button>
                     {workers.map(w => (
                       <button
                         key={w.id}
-                        onClick={() => { setWorker(w); setSlot(null); }}
+                        onClick={() => setLineWorker(idx, w)}
                         className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors
-                          ${worker?.id === w.id ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
+                          ${line.worker?.id === w.id ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
                       >{w.name}</button>
                     ))}
                     {workers.length === 0 && (
@@ -405,33 +470,26 @@ export default function BookingForm({ salon, initialServices }: Props) {
                     )}
                   </div>
                 )}
-              </div>
-            )}
 
-            {/* Time slots — appear once a date is chosen, re-fetch when staff changes */}
-            {date && (
-              <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-                <h2 className="text-sm font-semibold text-slate-700 mb-1">
-                  Available Times
-                  {worker && <span className="font-normal text-slate-500"> · {worker.name}</span>}
-                </h2>
-                <p className="text-xs text-slate-400 mb-4">Tap a time to select it</p>
-                {loadingSlots ? (
+                <p className="text-xs font-medium text-slate-500 mb-2">
+                  Time{line.worker && <span className="font-normal text-slate-400"> · {line.worker.name}</span>}
+                </p>
+                {line.loadingSlots ? (
                   <div className="grid grid-cols-3 gap-2">
                     {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="h-10 rounded-lg bg-slate-100 animate-pulse" />)}
                   </div>
-                ) : slots.length === 0 ? (
+                ) : line.slots.length === 0 ? (
                   <p className="text-sm text-slate-500 py-1">
-                    No times available{worker ? ` for ${worker.name}` : ''} on this date. Try a different date or staff member.
+                    No times available{line.worker ? ` for ${line.worker.name}` : ''} on this date. Try a different date or staff member.
                   </p>
                 ) : (
                   <div className="grid grid-cols-3 gap-2">
-                    {slots.map(s => (
+                    {line.slots.map(s => (
                       <button
                         key={s.startTime}
-                        onClick={() => setSlot(s)}
+                        onClick={() => setLineSlot(idx, s)}
                         className={`py-2.5 rounded-lg border text-sm font-medium transition-colors
-                          ${slot?.startTime === s.startTime
+                          ${line.slot?.startTime === s.startTime
                             ? 'bg-[var(--brand)] text-white border-[var(--brand)]'
                             : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
                       >{fmtTime(s.startTime)}</button>
@@ -439,10 +497,10 @@ export default function BookingForm({ salon, initialServices }: Props) {
                   </div>
                 )}
               </div>
-            )}
+            ))}
 
-            {/* Advance once date + time are both chosen */}
-            {date && slot && (
+            {/* Advance once date + every service has a time */}
+            {date && allLinesReady && (
               <button
                 onClick={() => setStep(3)}
                 className="w-full py-3 rounded-xl bg-[var(--brand)] text-white font-medium"
@@ -452,7 +510,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
             )}
 
             <button
-              onClick={() => { setDate(''); setWorker(null); setSlot(null); setStep(1); }}
+              onClick={() => setStep(1)}
               className="text-sm text-slate-500 hover:text-slate-700"
             >← Back to Services</button>
           </div>
@@ -465,29 +523,26 @@ export default function BookingForm({ salon, initialServices }: Props) {
             {/* Booking summary */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
               <h2 className="text-sm font-semibold text-slate-700 mb-3">Booking Summary</h2>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Service</span>
-                  <span className="font-medium text-slate-900">{service?.name}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Date</span>
-                  <span className="font-medium text-slate-900">{date ? formatDate(date) : '—'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Time</span>
-                  <span className="font-medium text-slate-900">{slot ? fmtTime(slot.startTime) : '—'}</span>
-                </div>
-                {worker && (
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Staff</span>
-                    <span className="font-medium text-slate-900">{worker.name}</span>
+              <div className="flex justify-between text-sm mb-3">
+                <span className="text-slate-500">Date</span>
+                <span className="font-medium text-slate-900">{date ? formatDate(date) : '—'}</span>
+              </div>
+              <div className="space-y-3">
+                {lines.map(l => (
+                  <div key={l.service.id} className="flex justify-between text-sm border-t border-slate-100 pt-3 first:border-0 first:pt-0">
+                    <div>
+                      <p className="font-medium text-slate-900">{l.service.name}</p>
+                      <p className="text-xs text-slate-500">
+                        {l.slot ? fmtTime(l.slot.startTime) : '—'}{l.worker ? ` · ${l.worker.name}` : ''}
+                      </p>
+                    </div>
+                    <span className="font-medium text-slate-900">UGX {Number(l.service.price).toLocaleString()}</span>
                   </div>
-                )}
-                <div className="flex justify-between pt-2 border-t border-slate-100">
-                  <span className="text-slate-500">Price</span>
-                  <span className="font-semibold text-[var(--brand)]">UGX {service ? Number(service.price).toLocaleString() : '—'}</span>
-                </div>
+                ))}
+              </div>
+              <div className="flex justify-between pt-3 mt-3 border-t border-slate-100">
+                <span className="text-sm font-semibold text-slate-700">Total</span>
+                <span className="text-sm font-bold text-[var(--brand)]">UGX {totalPrice.toLocaleString()}</span>
               </div>
             </div>
 
@@ -540,7 +595,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
             >
               {loading
                 ? <><span className="inline-block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Booking...</>
-                : 'Confirm Booking'}
+                : `Confirm Booking${lines.length > 1 ? `s (${lines.length})` : ''}`}
             </button>
             <button onClick={() => setStep(2)} className="text-sm text-slate-500 hover:text-slate-700">
               ← Back to Schedule
@@ -548,6 +603,24 @@ export default function BookingForm({ salon, initialServices }: Props) {
           </div>
         )}
       </div>
+
+      {/* Floating cart bar — step 1 only, once at least one service is picked */}
+      {step === 1 && selectedServices.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-4 py-3 z-10">
+          <div className="max-w-lg mx-auto flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">
+                {selectedServices.length} service{selectedServices.length > 1 ? 's' : ''} selected
+              </p>
+              <p className="text-xs text-slate-500">{totalDuration} min · UGX {totalPrice.toLocaleString()}</p>
+            </div>
+            <button
+              onClick={() => setStep(2)}
+              className="px-6 py-2.5 rounded-lg bg-[var(--brand)] text-white text-sm font-medium shrink-0"
+            >Continue →</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -564,15 +637,18 @@ function ServiceCard({
   return (
     <button
       onClick={onClick}
-      className={`text-left p-4 rounded-xl border transition-colors flex flex-col gap-1 w-full
+      className={`relative text-left p-4 rounded-xl border transition-colors flex flex-col gap-1 w-full
         ${selected
           ? 'border-[var(--brand)] bg-blue-50'
           : 'border-slate-200 hover:border-slate-300 bg-white'}`}
     >
+      {selected && (
+        <span className="absolute top-3 right-3 w-5 h-5 rounded-full bg-[var(--brand)] text-white text-xs flex items-center justify-center">✓</span>
+      )}
       {showCategory && service.category_name && (
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{service.category_name}</span>
       )}
-      <span className="font-semibold text-slate-900 text-sm leading-snug">{service.name}</span>
+      <span className="font-semibold text-slate-900 text-sm leading-snug pr-5">{service.name}</span>
       <span className="text-xs text-slate-400">{service.duration_minutes} min</span>
       <span className="text-sm font-bold text-[var(--brand)] mt-0.5">UGX {Number(service.price).toLocaleString()}</span>
     </button>

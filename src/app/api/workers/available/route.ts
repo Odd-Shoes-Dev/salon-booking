@@ -19,7 +19,10 @@ export async function GET(request: NextRequest) {
       : await getSalonBySubdomain(subdomain);
     if (!salon) return NextResponse.json({ error: 'Salon not found' }, { status: 404 });
 
-    const dayOfWeek = new Date(date).getDay();
+    // Parse as local calendar date, not UTC — new Date('YYYY-MM-DD') parses as
+    // UTC midnight, which can shift the weekday depending on server timezone.
+    const [dy, dm, dd] = date.split('-').map(Number);
+    const dayOfWeek = new Date(dy, dm - 1, dd).getDay();
 
     // Workers who have an explicit schedule for this day
     let workers = await sql`
