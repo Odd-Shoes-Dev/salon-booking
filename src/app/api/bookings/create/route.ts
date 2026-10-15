@@ -3,6 +3,7 @@ import { sql } from '@/lib/db';
 import { getSalonByDomain, getSalonBySubdomain } from '@/lib/tenants';
 import { generateBookingNumber } from '@/lib/slots';
 import { sendBookingConfirmationSms, sendNewBookingAlertSms } from '@/lib/sms';
+import { getCurrentClient } from '@/lib/auth';
 
 interface ServiceLine {
   service_id: string;
@@ -40,6 +41,21 @@ export async function POST(request: NextRequest) {
       ? await getSalonByDomain(host)
       : await getSalonBySubdomain(subdomain);
     if (!salon) return NextResponse.json({ error: 'Salon not found' }, { status: 404 });
+
+    // Link this booking to a real client: a logged-in session wins outright;
+    // otherwise best-effort match the typed phone against an existing client so
+    // a returning guest who doesn't log in still shows up correctly to staff.
+    let clientId: string | null = null;
+    const loggedInClient = await getCurrentClient();
+    if (loggedInClient && loggedInClient.salon_id === salon.id) {
+      clientId = loggedInClient.id;
+    } else {
+      const [matchedClient] = await sql`
+        SELECT id FROM clients
+        WHERE salon_id = ${salon.id} AND phone = ${guest_phone.trim()} AND is_active = true
+      `;
+      clientId = matchedClient?.id ?? null;
+    }
 
     // Minimum advance notice — configurable per salon (booking_settings.min_advance_minutes),
     // checked precisely in East Africa Time regardless of server timezone.
@@ -151,12 +167,12 @@ export async function POST(request: NextRequest) {
       // Create booking — branch_id is inferred from the assigned worker's branch
       const [booking] = await sql`
         INSERT INTO bookings (
-          salon_id, branch_id, guest_name, guest_phone,
+          salon_id, branch_id, client_id, guest_name, guest_phone,
           staff_id, service_id,
           booking_date, start_time, end_time,
           status, notes, booking_number
         ) VALUES (
-          ${salon.id}, ${worker.branch_id}, ${guest_name.trim()}, ${guest_phone.trim()},
+          ${salon.id}, ${worker.branch_id}, ${clientId}, ${guest_name.trim()}, ${guest_phone.trim()},
           ${worker.id}, ${line.service_id},
           ${booking_date}, ${line.start_time}, ${end_time},
           'pending', ${notes?.trim() || null}, ${bookingNumber}

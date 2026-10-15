@@ -137,6 +137,17 @@ export async function sendBookingConfirmedSms(params: {
   await sendSms(customerPhone, text);
 }
 
+/** SMS with a one-time login code for the client portal */
+export async function sendOtpSms(params: {
+  customerPhone: string;
+  code: string;
+  salonName: string;
+}): Promise<void> {
+  const { customerPhone, code, salonName } = params;
+  const text = `Your ${salonName} login code is ${code}. It expires in 10 minutes. Don't share this code with anyone.`;
+  await sendSms(customerPhone, text);
+}
+
 /** SMS to customer when booking is cancelled */
 export async function sendCancellationSms(params: {
   customerPhone: string;

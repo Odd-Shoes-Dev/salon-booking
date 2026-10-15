@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import toast from 'react-hot-toast';
 import type { Salon, Service } from '@/types';
 
@@ -56,9 +57,25 @@ export default function BookingForm({ salon, initialServices }: Props) {
   const [name,    setName]    = useState('');
   const [phone,   setPhone]   = useState('');
   const [notes,   setNotes]   = useState('');
+  const [loggedIn, setLoggedIn] = useState(false);
 
   const [loadingWorkers, setLoadingWorkers] = useState(false);
   const [loading,        setLoading]        = useState(false);
+
+  // If the guest is already logged in, pre-fill their details so they don't
+  // have to retype them — the booking still links to their account either way.
+  useEffect(() => {
+    fetch('/api/account/me')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          setName(d.name ?? '');
+          setPhone(d.phone ?? '');
+          setLoggedIn(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Service search / filter
   const [serviceSearch,  setServiceSearch]  = useState('');
@@ -228,22 +245,30 @@ export default function BookingForm({ salon, initialServices }: Props) {
     <div className="min-h-screen bg-slate-50">
       {/* Header — data already available from server, renders instantly */}
       <div className="bg-white border-b border-slate-200 px-4 py-4">
-        <div className="max-w-lg mx-auto flex items-center gap-3">
-          {salon.logo_url && (
-            <img
-              src={salon.logo_url}
-              alt={salon.name}
-              className="h-11 w-11 rounded-lg object-contain border border-slate-100 bg-white"
-            />
-          )}
-          <div>
-            <h1 className="text-xl font-semibold text-slate-900">{salon.name}</h1>
-            {salon.phone && (
-              <p className="text-sm text-slate-500 mt-0.5">
-                Need help? Call <a href={`tel:${salon.phone}`} className="text-[var(--brand)]">{salon.phone}</a>
-              </p>
+        <div className="max-w-lg mx-auto flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            {salon.logo_url && (
+              <img
+                src={salon.logo_url}
+                alt={salon.name}
+                className="h-11 w-11 rounded-lg object-contain border border-slate-100 bg-white"
+              />
             )}
+            <div>
+              <h1 className="text-xl font-semibold text-slate-900">{salon.name}</h1>
+              {salon.phone && (
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Need help? Call <a href={`tel:${salon.phone}`} className="text-[var(--brand)]">{salon.phone}</a>
+                </p>
+              )}
+            </div>
           </div>
+          <Link
+            href={loggedIn ? '/account' : '/account/login'}
+            className="text-sm text-[var(--brand)] font-medium shrink-0"
+          >
+            {loggedIn ? 'My Account' : 'Log In'}
+          </Link>
         </div>
       </div>
 
@@ -550,31 +575,40 @@ export default function BookingForm({ salon, initialServices }: Props) {
             <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
               <h2 className="text-sm font-semibold text-slate-700 mb-4">Your Details</h2>
               <div className="space-y-4">
-                <div>
-                  <label className={labelClass}>Full Name *</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={e => setName(e.target.value.slice(0, 100))}
-                    placeholder="Enter your name"
-                    autoComplete="name"
-                    className={inputClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Phone Number *</label>
-                  <input
-                    type="tel"
-                    value={phone}
-                    onChange={e => setPhone(e.target.value.slice(0, 30))}
-                    placeholder="+256 700 000 000"
-                    autoComplete="tel"
-                    className={inputClass}
-                  />
-                  <p className="mt-1.5 text-xs text-slate-500">
-                    Save this number — you&apos;ll need it to check or cancel your booking.
-                  </p>
-                </div>
+                {loggedIn ? (
+                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-blue-50 border border-blue-100 text-sm text-slate-700">
+                    <span>👤</span>
+                    <span>Booking as <strong className="font-semibold">{name}</strong> · {phone}</span>
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className={labelClass}>Full Name *</label>
+                      <input
+                        type="text"
+                        value={name}
+                        onChange={e => setName(e.target.value.slice(0, 100))}
+                        placeholder="Enter your name"
+                        autoComplete="name"
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass}>Phone Number *</label>
+                      <input
+                        type="tel"
+                        value={phone}
+                        onChange={e => setPhone(e.target.value.slice(0, 30))}
+                        placeholder="+256 700 000 000"
+                        autoComplete="tel"
+                        className={inputClass}
+                      />
+                      <p className="mt-1.5 text-xs text-slate-500">
+                        Save this number — you&apos;ll need it to check or cancel your booking.
+                      </p>
+                    </div>
+                  </>
+                )}
                 <div>
                   <label className={labelClass}>Notes <span className="text-slate-400 font-normal">(optional)</span></label>
                   <textarea
