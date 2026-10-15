@@ -17,7 +17,7 @@ interface ServiceLine {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { guest_name, guest_phone, booking_date, notes } = body;
+    const { guest_name, guest_phone, booking_date, notes, skipVerification } = body;
 
     const serviceLines: ServiceLine[] = Array.isArray(body.services)
       ? body.services
@@ -42,9 +42,16 @@ export async function POST(request: NextRequest) {
       : await getSalonBySubdomain(subdomain);
     if (!salon) return NextResponse.json({ error: 'Salon not found' }, { status: 404 });
 
-    // Link this booking to a real client: a logged-in session wins outright;
-    // otherwise best-effort match the typed phone against an existing client so
-    // a returning guest who doesn't log in still shows up correctly to staff.
+    // Link this booking to a real client:
+    //  - Logged in (OTP-verified session)         -> use that client, no further checks.
+    //  - Phone matches an EXISTING client, unverified -> don't silently attach to a
+    //    stranger's profile (they could have typed someone else's number by mistake
+    //    or on purpose). Ask the caller to verify via OTP first, unless they've
+    //    explicitly opted to continue as an unlinked guest (skipVerification).
+    //  - Phone doesn't match anyone                -> brand-new number, nothing to
+    //    impersonate, so create the client immediately from what they typed. Any
+    //    later booking with this number is now "recognized" and goes through the
+    //    verification branch above.
     let clientId: string | null = null;
     const loggedInClient = await getCurrentClient();
     if (loggedInClient && loggedInClient.salon_id === salon.id) {
@@ -54,7 +61,26 @@ export async function POST(request: NextRequest) {
         SELECT id FROM clients
         WHERE salon_id = ${salon.id} AND phone = ${guest_phone.trim()} AND is_active = true
       `;
-      clientId = matchedClient?.id ?? null;
+      if (matchedClient) {
+        if (!skipVerification) {
+          return NextResponse.json({ requiresVerification: true });
+        }
+        clientId = null; // explicitly chose to continue without linking
+      } else {
+        let registrationBranchId: string | null = null;
+        const [firstBranch] = await sql`
+          SELECT id FROM branches WHERE salon_id = ${salon.id} AND deleted_at IS NULL
+          ORDER BY created_at ASC LIMIT 1
+        `;
+        registrationBranchId = firstBranch?.id ?? null;
+
+        const [newClient] = await sql`
+          INSERT INTO clients (salon_id, name, phone, registered_at_branch_id)
+          VALUES (${salon.id}, ${guest_name.trim()}, ${guest_phone.trim()}, ${registrationBranchId})
+          RETURNING id
+        `;
+        clientId = newClient.id;
+      }
     }
 
     // Minimum advance notice — configurable per salon (booking_settings.min_advance_minutes),

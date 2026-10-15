@@ -203,11 +203,13 @@ export default function BookingForm({ salon, initialServices }: Props) {
 
   const allLinesReady = lines.length > 0 && lines.every(l => l.slot);
 
-  const handleSubmit = useCallback(async () => {
-    if (!date || !allLinesReady || !name.trim() || !phone.trim()) {
-      toast.error('Please fill in all required fields.');
-      return;
-    }
+  // Inline "this number is already a client — verify to continue" step
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [otpSent,    setOtpSent]    = useState(false);
+  const [otpCode,    setOtpCode]    = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+
+  const submitBooking = useCallback(async (opts?: { skipVerification?: boolean }) => {
     setLoading(true);
     try {
       const res = await fetch('/api/bookings/create', {
@@ -218,6 +220,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
           guest_phone: phone.trim(),
           booking_date: date,
           notes: notes.trim() || null,
+          skipVerification: opts?.skipVerification,
           services: lines.map(l => ({
             service_id: l.service.id,
             staff_id: l.worker?.id ?? null,
@@ -226,6 +229,11 @@ export default function BookingForm({ salon, initialServices }: Props) {
         }),
       });
       const data = await res.json();
+      if (data.requiresVerification) {
+        setNeedsVerification(true);
+        setLoading(false);
+        return;
+      }
       if (!res.ok) { toast.error(data.error ?? 'Failed to create booking.'); setLoading(false); return; }
       const numbers: string[] = data.bookingNumbers ?? (data.bookingNumber ? [data.bookingNumber] : []);
       if (numbers.length === 0) { toast.error('Booking created but no reference was returned.'); setLoading(false); return; }
@@ -236,7 +244,57 @@ export default function BookingForm({ salon, initialServices }: Props) {
       toast.error('Network error. Please try again.');
       setLoading(false);
     }
-  }, [date, allLinesReady, lines, name, phone, notes, router]);
+  }, [date, lines, name, phone, notes, router]);
+
+  const handleSubmit = useCallback(() => {
+    if (!date || !allLinesReady || !name.trim() || !phone.trim()) {
+      toast.error('Please fill in all required fields.');
+      return;
+    }
+    submitBooking();
+  }, [date, allLinesReady, name, phone, submitBooking]);
+
+  const sendVerificationCode = async () => {
+    setOtpLoading(true);
+    try {
+      const res = await fetch('/api/auth/request-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phone.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error ?? 'Failed to send code.'); return; }
+      setOtpSent(true);
+      toast.success('Code sent! Check your phone.');
+    } catch {
+      toast.error('Network error. Please try again.');
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const verifyAndBook = async () => {
+    if (!otpCode.trim()) { toast.error('Enter the code we sent you.'); return; }
+    setOtpLoading(true);
+    try {
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phone.trim(), code: otpCode.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.requiresName) { toast.error(data.error ?? 'Verification failed. Please try again.'); return; }
+      setNeedsVerification(false);
+      setOtpSent(false);
+      setOtpCode('');
+      setLoggedIn(true);
+      await submitBooking();
+    } catch {
+      toast.error('Network error. Please try again.');
+    } finally {
+      setOtpLoading(false);
+    }
+  };
 
   const inputClass = 'w-full px-4 py-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--brand)] text-slate-900 bg-white';
   const labelClass = 'block text-sm font-medium text-slate-700 mb-2';
@@ -622,15 +680,60 @@ export default function BookingForm({ salon, initialServices }: Props) {
               </div>
             </div>
 
-            <button
-              onClick={handleSubmit}
-              disabled={loading || !name.trim() || !phone.trim()}
-              className="w-full py-3 rounded-xl bg-[var(--brand)] text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {loading
-                ? <><span className="inline-block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Booking...</>
-                : `Confirm Booking${lines.length > 1 ? `s (${lines.length})` : ''}`}
-            </button>
+            {needsVerification ? (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 space-y-3">
+                <p className="text-sm font-medium text-slate-900">This number is already registered</p>
+                <p className="text-xs text-slate-500">
+                  Verify it&apos;s you with a one-time code so this booking shows up correctly in your account —
+                  or continue without verifying and we&apos;ll book it as a guest.
+                </p>
+                {!otpSent ? (
+                  <button
+                    onClick={sendVerificationCode}
+                    disabled={otpLoading}
+                    className="w-full py-2.5 rounded-lg bg-[var(--brand)] text-white text-sm font-medium disabled:opacity-40"
+                  >
+                    {otpLoading ? 'Sending...' : 'Send Verification Code'}
+                  </button>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={otpCode}
+                      onChange={e => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="123456"
+                      className={inputClass + ' tracking-widest text-center'}
+                      onKeyDown={e => e.key === 'Enter' && verifyAndBook()}
+                    />
+                    <button
+                      onClick={verifyAndBook}
+                      disabled={otpLoading}
+                      className="w-full py-2.5 rounded-lg bg-[var(--brand)] text-white text-sm font-medium disabled:opacity-40"
+                    >
+                      {otpLoading ? 'Verifying...' : 'Verify & Book'}
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={() => submitBooking({ skipVerification: true })}
+                  disabled={loading || otpLoading}
+                  className="w-full text-sm text-slate-500 hover:text-slate-700 disabled:opacity-40"
+                >
+                  Continue as guest without verifying
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleSubmit}
+                disabled={loading || !name.trim() || !phone.trim()}
+                className="w-full py-3 rounded-xl bg-[var(--brand)] text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {loading
+                  ? <><span className="inline-block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Booking...</>
+                  : `Confirm Booking${lines.length > 1 ? `s (${lines.length})` : ''}`}
+              </button>
+            )}
             <button onClick={() => setStep(2)} className="text-sm text-slate-500 hover:text-slate-700">
               ← Back to Schedule
             </button>
