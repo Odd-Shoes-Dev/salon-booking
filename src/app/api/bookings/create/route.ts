@@ -52,10 +52,15 @@ export async function POST(request: NextRequest) {
     //    impersonate, so create the client immediately from what they typed. Any
     //    later booking with this number is now "recognized" and goes through the
     //    verification branch above.
+    // resolvedClientName is the salon's own saved name for this client (when
+    // known) — used in the owner alert instead of whatever was typed, since
+    // that's the name staff actually recognize a returning client by.
     let clientId: string | null = null;
+    let resolvedClientName: string | null = null;
     const loggedInClient = await getCurrentClient();
     if (loggedInClient && loggedInClient.salon_id === salon.id) {
       clientId = loggedInClient.id;
+      resolvedClientName = loggedInClient.name;
     } else {
       const [matchedClient] = await sql`
         SELECT id FROM clients
@@ -80,6 +85,7 @@ export async function POST(request: NextRequest) {
           RETURNING id
         `;
         clientId = newClient.id;
+        resolvedClientName = guest_name.trim(); // identical to typed name — just created from it
       }
     }
 
@@ -237,9 +243,16 @@ export async function POST(request: NextRequest) {
     });
 
     if (salon.phone) {
+      const typedName = guest_name.trim();
+      const primaryName = resolvedClientName ?? typedName;
+      const bookedAsName = resolvedClientName && resolvedClientName.toLowerCase() !== typedName.toLowerCase()
+        ? typedName
+        : undefined;
+
       sendNewBookingAlertSms({
         ownerPhone: salon.phone,
-        customerName: guest_name.trim(),
+        customerName: primaryName,
+        bookedAsName,
         customerPhone: guest_phone.trim(),
         bookingNumber: refSummary,
         bookingDate: formattedDate,

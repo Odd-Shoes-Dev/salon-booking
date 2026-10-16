@@ -145,17 +145,20 @@ export async function sendBookingConfirmationSms(params: {
 export async function sendNewBookingAlertSms(params: {
   ownerPhone: string;
   customerName: string;
+  /** The name they typed on the form, only passed when it differs from customerName (an existing client's name on file). */
+  bookedAsName?: string;
   customerPhone: string;
   bookingNumber: string;
   bookingDate: string;
   startTime: string;
   serviceName: string;
 }): Promise<void> {
-  const { ownerPhone, customerName, customerPhone, bookingNumber, bookingDate, startTime, serviceName } = params;
+  const { ownerPhone, customerName, bookedAsName, customerPhone, bookingNumber, bookingDate, startTime, serviceName } = params;
   const text =
     `New self-booking!\n` +
     `Ref: ${bookingNumber}\n` +
     `Client: ${customerName} (${customerPhone})\n` +
+    (bookedAsName ? `Booked as: ${bookedAsName}\n` : '') +
     `${serviceName} - ${bookingDate} at ${startTime}.`;
   await sendSms(ownerPhone, text, 'New Booking Alert');
 }
