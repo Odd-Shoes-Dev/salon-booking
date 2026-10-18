@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
 import { getSalonByDomain, getSalonBySubdomain } from '@/lib/tenants';
 import { getAvailableSlots } from '@/lib/slots';
+import { hoursUntilEAT } from '@/lib/time';
 
 // POST /api/bookings/[bookingNumber]/reschedule
 // Body: { guest_phone, new_date, new_start_time, new_end_time }
@@ -50,8 +51,7 @@ export async function POST(
       SELECT cancellation_hours FROM booking_settings WHERE salon_id = ${salon.id}
     `;
     const cancellationHours = settings?.cancellation_hours ?? 24;
-    const originalDateTime = new Date(`${booking.booking_date}T${booking.start_time}`);
-    const hoursUntil = (originalDateTime.getTime() - Date.now()) / 3_600_000;
+    const hoursUntil = hoursUntilEAT(booking.booking_date, booking.start_time);
     if (hoursUntil <= cancellationHours) {
       return NextResponse.json(
         { error: `Reschedules must be made at least ${cancellationHours} hours before the appointment.` },
@@ -59,17 +59,9 @@ export async function POST(
       );
     }
 
-    // 48-hour minimum on new date
-    const minDate = new Date();
-    minDate.setMinutes(minDate.getMinutes() + 2880);
-    if (new Date(new_date) < new Date(minDate.toISOString().slice(0, 10))) {
-      return NextResponse.json(
-        { error: 'New date must be at least 48 hours from now.' },
-        { status: 400 }
-      );
-    }
-
-    // Check the new slot is free
+    // Check the new slot is free — getAvailableSlots enforces the salon's
+    // configured minimum advance notice internally, so a too-soon slot simply
+    // won't appear here.
     const [service] = await sql`SELECT duration_minutes FROM services WHERE id = ${booking.service_id}`;
     const slots = await getAvailableSlots(
       salon.id, new_date, service?.duration_minutes ?? 60, booking.staff_id

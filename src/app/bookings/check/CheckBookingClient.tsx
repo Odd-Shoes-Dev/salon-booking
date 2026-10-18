@@ -42,10 +42,11 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   no_show:   { label: 'No Show',               color: 'text-slate-500 bg-slate-50 border-slate-200' },
 };
 
+// Local calendar date, not UTC — avoids the day shifting near midnight
+// depending on the browser's own timezone.
 function getMinDate(): string {
   const d = new Date();
-  d.setDate(d.getDate() + 2);
-  return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 interface Props {

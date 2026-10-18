@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
 import { getSalonByDomain, getSalonBySubdomain } from '@/lib/tenants';
+import { hoursUntilEAT } from '@/lib/time';
 
 // POST /api/bookings/check  — two-factor: booking_number + guest_phone
 // Body: { booking_number, guest_phone }
@@ -49,8 +50,7 @@ export async function POST(request: NextRequest) {
       SELECT cancellation_hours FROM booking_settings WHERE salon_id = ${salon.id}
     `;
     const cancellationHours = settings?.cancellation_hours ?? 24;
-    const bookingDateTime = new Date(`${booking.booking_date}T${booking.start_time}`);
-    const hoursUntil = (bookingDateTime.getTime() - Date.now()) / 3_600_000;
+    const hoursUntil = hoursUntilEAT(booking.booking_date, booking.start_time);
     const canCancel = ['pending', 'confirmed'].includes(booking.status) && hoursUntil > cancellationHours;
     const canReschedule = canCancel;
 
