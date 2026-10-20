@@ -26,9 +26,11 @@ export async function POST(
       : await getSalonBySubdomain(subdomain);
     if (!salon) return NextResponse.json({ error: 'Salon not found' }, { status: 404 });
 
-    // Verify ownership
+    // Verify ownership. ::text casts matter — the Neon driver returns plain
+    // date/time columns as JS Date objects, not strings, and hoursUntilEAT()
+    // below calls .split() expecting a real string.
     const [booking] = await sql`
-      SELECT id, status, guest_name, guest_phone, booking_date, start_time
+      SELECT id, status, guest_name, guest_phone, booking_date::text, start_time::text
       FROM bookings
       WHERE salon_id      = ${salon.id}
         AND booking_number = ${bookingNumber.trim().toUpperCase()}
