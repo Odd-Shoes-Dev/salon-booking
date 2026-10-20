@@ -18,14 +18,16 @@ export default async function BookingPage() {
     : await getSalonBySubdomain(subdomain);
   if (!salon) notFound();
 
+  // Grouped by the plain-text `category` column, not the category_id FK —
+  // the main system's own Services page groups the same way, and
+  // category_id is never actually populated by it.
   const services = await sql`
     SELECT s.id, s.name, s.price, s.duration_minutes, s.description,
-           c.name AS category_name
+           s.category AS category_name
     FROM services s
-    LEFT JOIN service_categories c ON c.id = s.category_id
     WHERE s.salon_id  = ${salon.id}
       AND s.is_active = true
-    ORDER BY c.name NULLS LAST, s.name
+    ORDER BY s.category NULLS LAST, s.name
   `;
 
   return <BookingForm salon={salon} initialServices={services as Service[]} />;
