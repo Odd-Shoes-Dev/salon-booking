@@ -30,6 +30,7 @@ export async function POST(request: NextRequest) {
         b.guest_name, b.guest_phone,
         b.booking_date::text, b.start_time::text, b.end_time::text,
         b.notes, b.cancellation_reason, b.created_at, b.cancelled_at, b.rescheduled_at,
+        b.staff_id, b.service_id,
         s.name  AS service_name, s.price AS service_price, s.duration_minutes,
         w.name  AS staff_name
       FROM bookings b

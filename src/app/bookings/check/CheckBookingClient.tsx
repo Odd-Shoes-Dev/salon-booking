@@ -15,11 +15,16 @@ interface Booking {
   end_time: string;
   service_name: string;
   service_price: number;
+  staff_id?: string;
   staff_name?: string;
+  service_id?: string;
+  duration_minutes?: number;
   notes?: string;
   cancellation_reason?: string;
   rescheduled_at?: string;
 }
+
+interface Worker { id: string; name: string; }
 
 function fmtTime(t: string): string {
   const [h, m] = t.slice(0, 5).split(':').map(Number);
@@ -75,10 +80,15 @@ export default function CheckBookingClient({ salon }: Props) {
   // Reschedule modal
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [newDate,        setNewDate]        = useState('');
-  const [availableSlots, setAvailableSlots] = useState<{ startTime: string; endTime: string }[]>([]);
+  const [availableSlots, setAvailableSlots] = useState<{ startTime: string; endTime: string; availableStaff?: { id: string; name: string }[] }[]>([]);
   const [loadingSlots,   setLoadingSlots]   = useState(false);
   const [newSlot,        setNewSlot]        = useState<{ startTime: string; endTime: string } | null>(null);
   const [rescheduling,   setRescheduling]   = useState(false);
+  // 'any' = let the system assign whoever's free; otherwise a worker id.
+  // Starts on the booking's current stylist so switching is opt-in.
+  const [selectedStaffId, setSelectedStaffId] = useState<string>('any');
+  const [workers,        setWorkers]        = useState<Worker[]>([]);
+  const [loadingWorkers, setLoadingWorkers]  = useState(false);
 
   const handleLookup = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -124,13 +134,28 @@ export default function CheckBookingClient({ salon }: Props) {
     setCancelling(false);
   }, [booking, phone, cancelReason]);
 
-  const loadSlotsForDate = useCallback(async (d: string) => {
+  const loadWorkersForDate = useCallback(async (d: string) => {
+    if (!d) return;
+    setLoadingWorkers(true);
+    try {
+      const res = await fetch(`/api/workers/available?date=${d}`);
+      const data = await res.json();
+      setWorkers(Array.isArray(data) ? data : []);
+    } catch {
+      setWorkers([]);
+    }
+    setLoadingWorkers(false);
+  }, []);
+
+  const loadSlotsForDate = useCallback(async (d: string, staffId: string) => {
     if (!booking || !d) return;
     setLoadingSlots(true);
     setAvailableSlots([]);
     setNewSlot(null);
     try {
-      const res = await fetch(`/api/slots/available?date=${d}&serviceDuration=60`);
+      const duration = booking.duration_minutes ?? 60;
+      const staffParam = staffId !== 'any' ? `&staffId=${staffId}` : '';
+      const res = await fetch(`/api/slots/available?date=${d}&serviceDuration=${duration}${staffParam}`);
       const data = await res.json();
       setAvailableSlots(Array.isArray(data) ? data : []);
     } catch {
@@ -151,6 +176,7 @@ export default function CheckBookingClient({ salon }: Props) {
           new_date: newDate,
           new_start_time: newSlot.startTime,
           new_end_time: newSlot.endTime,
+          new_staff_id: selectedStaffId,
         }),
       });
       const data = await res.json();
@@ -163,13 +189,15 @@ export default function CheckBookingClient({ salon }: Props) {
         end_time: newSlot.endTime,
         status: 'pending',
         rescheduled_at: new Date().toISOString(),
+        staff_id: data.newStaffId ?? prev.staff_id,
+        staff_name: data.newStaffName ?? prev.staff_name,
       } : null);
       setRescheduleOpen(false);
     } catch {
       toast.error('Network error.');
     }
     setRescheduling(false);
-  }, [booking, newDate, newSlot, phone]);
+  }, [booking, newDate, newSlot, phone, selectedStaffId]);
 
   const statusInfo = booking
     ? (STATUS_LABELS[booking.status] ?? { label: booking.status, color: 'text-slate-700 bg-slate-50 border-slate-200' })
@@ -283,7 +311,14 @@ export default function CheckBookingClient({ salon }: Props) {
               <div className="flex gap-3">
                 {canReschedule && (
                   <button
-                    onClick={() => setRescheduleOpen(true)}
+                    onClick={() => {
+                      setSelectedStaffId(booking.staff_id ?? 'any');
+                      setNewDate('');
+                      setAvailableSlots([]);
+                      setNewSlot(null);
+                      setWorkers([]);
+                      setRescheduleOpen(true);
+                    }}
                     className="flex-1 py-3 rounded-lg border border-[var(--brand)] text-[var(--brand)] text-sm font-medium"
                   >
                     Reschedule
@@ -341,25 +376,64 @@ export default function CheckBookingClient({ salon }: Props) {
       {/* Reschedule modal */}
       {rescheduleOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-md p-6 shadow-xl">
-            <h3 className="text-base font-semibold text-slate-900 mb-4">Reschedule Booking</h3>
+          <div className="bg-white rounded-xl w-full max-w-md shadow-xl max-h-[90vh] flex flex-col">
+            <h3 className="text-base font-semibold text-slate-900 p-6 pb-4 shrink-0">Reschedule Booking</h3>
+            <div className="px-6 overflow-y-auto flex-1">
             <div className="mb-4">
               <label className={labelClass}>New Date</label>
               <input
                 type="date"
                 min={getMinDate()}
                 value={newDate}
-                onChange={e => { setNewDate(e.target.value); loadSlotsForDate(e.target.value); }}
+                onChange={e => {
+                  const d = e.target.value;
+                  setNewDate(d);
+                  loadWorkersForDate(d);
+                  loadSlotsForDate(d, selectedStaffId);
+                }}
                 className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--brand)] text-slate-900"
               />
             </div>
             {newDate && (
               <div className="mb-4">
+                <p className={labelClass}>Staff</p>
+                {loadingWorkers ? (
+                  <div className="flex gap-2 flex-wrap">
+                    {[1, 2, 3].map(i => <div key={i} className="h-9 w-24 rounded-lg bg-slate-100 animate-pulse" />)}
+                  </div>
+                ) : (
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={() => { setSelectedStaffId('any'); loadSlotsForDate(newDate, 'any'); }}
+                      className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors
+                        ${selectedStaffId === 'any' ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
+                    >Any Staff</button>
+                    {workers.map(w => (
+                      <button
+                        key={w.id}
+                        onClick={() => { setSelectedStaffId(w.id); loadSlotsForDate(newDate, w.id); }}
+                        className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors
+                          ${selectedStaffId === w.id ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
+                      >{w.name}</button>
+                    ))}
+                    {workers.length === 0 && (
+                      <p className="text-sm text-slate-500">No staff available on this day.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            {newDate && (
+              <div className="mb-4">
                 <label className={labelClass}>New Time</label>
                 {loadingSlots ? (
-                  <p className="text-sm text-slate-500">Loading slots...</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="h-10 rounded-lg bg-slate-100 animate-pulse" />)}
+                  </div>
                 ) : availableSlots.length === 0 ? (
-                  <p className="text-sm text-slate-500">No available slots on this date.</p>
+                  <p className="text-sm text-slate-500">
+                    No times available{selectedStaffId !== 'any' ? ` for ${workers.find(w => w.id === selectedStaffId)?.name ?? 'this staff member'}` : ''} on this date. Try a different date or staff member.
+                  </p>
                 ) : (
                   <div className="grid grid-cols-3 gap-2">
                     {availableSlots.map(s => (
@@ -378,7 +452,8 @@ export default function CheckBookingClient({ salon }: Props) {
                 )}
               </div>
             )}
-            <div className="flex gap-3">
+            </div>
+            <div className="flex gap-3 p-6 pt-4 shrink-0">
               <button
                 onClick={() => setRescheduleOpen(false)}
                 className="flex-1 py-3 rounded-lg border border-slate-200 text-slate-700 text-sm font-medium"
