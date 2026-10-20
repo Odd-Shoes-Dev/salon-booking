@@ -319,6 +319,9 @@ export default function BookingForm({ salon, initialServices }: Props) {
                   Need help? Call <a href={`tel:${salon.phone}`} className="text-[var(--brand)]">{salon.phone}</a>
                 </p>
               )}
+              <Link href="/bookings/check" className="block text-sm text-[var(--brand)] font-medium mt-0.5">
+                Check Booking
+              </Link>
             </div>
           </div>
           <Link

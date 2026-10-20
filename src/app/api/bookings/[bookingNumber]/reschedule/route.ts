@@ -3,6 +3,7 @@ import { sql } from '@/lib/db';
 import { getSalonByDomain, getSalonBySubdomain } from '@/lib/tenants';
 import { getAvailableSlots } from '@/lib/slots';
 import { hoursUntilEAT } from '@/lib/time';
+import { sendRescheduleConfirmationSms, sendRescheduleAlertSms } from '@/lib/sms';
 
 // POST /api/bookings/[bookingNumber]/reschedule
 // Body: { guest_phone, new_date, new_start_time, new_end_time }
@@ -31,7 +32,7 @@ export async function POST(
 
     // Verify ownership
     const [booking] = await sql`
-      SELECT id, status, guest_name, guest_phone,
+      SELECT id, status, guest_name, guest_phone, booking_number,
              booking_date, start_time, end_time,
              staff_id, service_id
       FROM bookings
@@ -82,6 +83,33 @@ export async function POST(
           rescheduled_at = NOW()
       WHERE id = ${booking.id}
     `;
+
+    // Notify both sides, non-blocking — the reschedule already succeeded.
+    const formattedDate = new Date(new_date + 'T12:00:00').toLocaleDateString('en-GB', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    });
+    const formattedTime = new_start_time.slice(0, 5);
+    const customerName = booking.guest_name ?? 'there';
+
+    sendRescheduleConfirmationSms({
+      customerPhone: booking.guest_phone,
+      customerName,
+      bookingNumber: booking.booking_number,
+      salonName: salon.name,
+      newDate: formattedDate,
+      newStartTime: formattedTime,
+    });
+
+    if (salon.phone) {
+      sendRescheduleAlertSms({
+        ownerPhone: salon.phone,
+        customerName,
+        customerPhone: booking.guest_phone,
+        bookingNumber: booking.booking_number,
+        newDate: formattedDate,
+        newStartTime: formattedTime,
+      });
+    }
 
     return NextResponse.json({ success: true, newDate: new_date, newStartTime: new_start_time });
   } catch (err) {

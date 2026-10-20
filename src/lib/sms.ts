@@ -195,6 +195,39 @@ export async function sendOtpSms(params: {
   await sendSms(customerPhone, text, 'Login Notice');
 }
 
+/** SMS to customer confirming their own reschedule went through */
+export async function sendRescheduleConfirmationSms(params: {
+  customerPhone: string;
+  customerName: string;
+  bookingNumber: string;
+  salonName: string;
+  newDate: string;
+  newStartTime: string;
+}): Promise<void> {
+  const { customerPhone, customerName, bookingNumber, salonName, newDate, newStartTime } = params;
+  const text =
+    `Hi ${customerName}! Your booking ${bookingNumber} at ${salonName} has been moved to ${newDate} at ${newStartTime}.`;
+  await sendSms(customerPhone, text, 'Booking Rescheduled');
+}
+
+/** SMS to salon owner when a customer reschedules their own booking */
+export async function sendRescheduleAlertSms(params: {
+  ownerPhone: string;
+  customerName: string;
+  customerPhone: string;
+  bookingNumber: string;
+  newDate: string;
+  newStartTime: string;
+}): Promise<void> {
+  const { ownerPhone, customerName, customerPhone, bookingNumber, newDate, newStartTime } = params;
+  const text =
+    `Booking rescheduled!\n` +
+    `Ref: ${bookingNumber}\n` +
+    `Client: ${customerName} (${customerPhone})\n` +
+    `New time: ${newDate} at ${newStartTime}.`;
+  await sendSms(ownerPhone, text, 'Booking Rescheduled');
+}
+
 /** SMS to customer when booking is cancelled */
 export async function sendCancellationSms(params: {
   customerPhone: string;
