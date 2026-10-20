@@ -789,6 +789,9 @@ function ServiceCard({
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{service.category_name}</span>
       )}
       <span className="font-semibold text-slate-900 text-sm leading-snug pr-5">{service.name}</span>
+      {service.description && (
+        <span className="text-xs text-slate-500 leading-snug line-clamp-2">{service.description}</span>
+      )}
       <span className="text-xs text-slate-400">{service.duration_minutes} min</span>
       <span className="text-sm font-bold text-[var(--brand)] mt-0.5">UGX {Number(service.price).toLocaleString()}</span>
     </button>

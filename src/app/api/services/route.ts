@@ -12,14 +12,17 @@ export async function GET(request: NextRequest) {
       : await getSalonBySubdomain(subdomain);
     if (!salon) return NextResponse.json({ error: 'Salon not found' }, { status: 404 });
 
+    // Services are grouped by the plain-text `category` column, not the
+    // `category_id` FK — the main system's own Services page groups the
+    // same way (and even its own API matches categories by this name
+    // string), and category_id is never actually populated by it.
     const services = await sql`
       SELECT s.id, s.name, s.price, s.duration_minutes, s.description,
-             c.name AS category_name
+             s.category AS category_name
       FROM services s
-      LEFT JOIN service_categories c ON c.id = s.category_id
       WHERE s.salon_id = ${salon.id}
         AND s.is_active = true
-      ORDER BY c.name NULLS LAST, s.name
+      ORDER BY s.category NULLS LAST, s.name
     `;
 
     return NextResponse.json(services);
