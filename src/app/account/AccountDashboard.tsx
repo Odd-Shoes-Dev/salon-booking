@@ -22,6 +22,7 @@ export interface AccountVoucher {
   code: string;
   value: number;
   remaining_value: number;
+  discount_type: 'fixed' | 'percentage';
   status: string;
   expires_at: string | null;
   note: string | null;
@@ -139,7 +140,9 @@ export default function AccountDashboard({ salon, client, initialBookings, initi
                     <p className="font-mono font-semibold text-slate-900 text-sm">{v.code}</p>
                     {v.note && <p className="text-xs text-slate-500">{v.note}</p>}
                   </div>
-                  <span className="text-sm font-bold text-[var(--brand)]">UGX {Number(v.remaining_value).toLocaleString()}</span>
+                  <span className="text-sm font-bold text-[var(--brand)]">
+                    {v.discount_type === 'percentage' ? `${v.value}% off` : `UGX ${Number(v.remaining_value).toLocaleString()}`}
+                  </span>
                 </div>
               ))}
             </div>
