@@ -77,87 +77,89 @@ export default async function ConfirmationPage({ params, searchParams }: Props) 
 
       <div className="max-w-lg mx-auto px-4 py-6 space-y-4">
 
-        {/* Status banner */}
-        <div className={`rounded-xl p-4 border ${isConfirmed ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
-          <p className={`font-semibold text-base ${isConfirmed ? 'text-green-800' : 'text-amber-800'}`}>
-            {isConfirmed ? '✓ Booking Confirmed!' : 'Booking Received'}
-          </p>
-          <p className={`text-sm mt-0.5 ${isConfirmed ? 'text-green-700' : 'text-amber-700'}`}>
-            {isConfirmed
-              ? 'Your appointment is confirmed. See you soon!'
-              : 'We\'ve received your request. We\'ll confirm it shortly.'}
-          </p>
-        </div>
-
-        {/* Booking reference — most important box */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
-          <p className="text-xs font-semibold text-slate-500 tracking-widest uppercase mb-3">
-            Your Booking Reference{isMultiple ? 's' : ''}
-          </p>
-          <div className={isMultiple ? 'space-y-2' : ''}>
-            {bookingRows.map(b => (
-              <div key={b.booking_number} className="bg-slate-50 rounded-lg border border-slate-200 p-4 text-center">
-                <p className="text-2xl font-bold text-slate-900 tracking-wider font-mono">
-                  {b.booking_number}
-                </p>
-                {isMultiple && (
-                  <p className="text-xs text-slate-500 mt-1">{b.service_name}</p>
-                )}
-              </div>
-            ))}
+        <div id="booking-slip" className="space-y-4 bg-slate-50">
+          {/* Status badge */}
+          <div className="flex justify-center">
+            <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${isConfirmed ? 'text-green-700 bg-green-50 border-green-200' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
+              {isConfirmed ? '✓ Confirmed' : 'Pending Confirmation'}
+            </span>
           </div>
-          <div className="mt-3 flex items-center gap-2 text-sm text-slate-600 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-            <span>📱</span>
-            <span>Phone used: <strong className="font-semibold">{booking.guest_phone}</strong></span>
-          </div>
-          <p className="mt-3 text-xs text-slate-500 text-center">
-            Save {isMultiple ? 'these Booking IDs' : 'this Booking ID'} and the phone number above — you need both to check or manage your appointment{isMultiple ? 's' : ''}.
-          </p>
-        </div>
 
-        {/* Appointment details */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
-          <p className="text-xs font-semibold text-slate-500 tracking-widest uppercase mb-4">Appointment Details</p>
-          <dl className="space-y-3">
-            <div className="flex justify-between">
-              <dt className="text-sm text-slate-500">Guest</dt>
-              <dd className="text-sm font-medium text-slate-900">{booking.guest_name}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-sm text-slate-500">Date</dt>
-              <dd className="text-sm font-medium text-slate-900">{formattedDate}</dd>
-            </div>
-          </dl>
-          <div className="space-y-3 mt-3 pt-3 border-t border-slate-100">
-            {bookingRows.map(b => (
-              <div key={b.booking_number} className="flex justify-between text-sm">
-                <div>
-                  <p className="font-medium text-slate-900">{b.service_name}</p>
-                  <p className="text-xs text-slate-500">
-                    {fmtTime(b.start_time)} – {fmtTime(b.end_time)}{b.staff_name ? ` · ${b.staff_name}` : ''}
+          {/* Booking reference — most important box */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+            <p className="text-xs font-semibold text-slate-500 tracking-widest uppercase mb-3">
+              Your Booking Reference{isMultiple ? 's' : ''}
+            </p>
+            <div className={isMultiple ? 'space-y-2' : ''}>
+              {bookingRows.map(b => (
+                <div key={b.booking_number} className="bg-slate-50 rounded-lg border border-slate-200 p-4 text-center">
+                  <p className="text-2xl font-bold text-slate-900 tracking-wider font-mono">
+                    {b.booking_number}
                   </p>
+                  {isMultiple && (
+                    <p className="text-xs text-slate-500 mt-1">{b.service_name}</p>
+                  )}
                 </div>
-                <span className="font-medium text-slate-900 shrink-0">UGX {Number(b.service_price).toLocaleString()}</span>
-              </div>
-            ))}
-          </div>
-          <div className="flex justify-between border-t border-slate-100 pt-3 mt-3">
-            <dt className="text-sm font-semibold text-slate-700">Total</dt>
-            <dd className="text-sm font-bold text-slate-900">UGX {totalPrice.toLocaleString()}</dd>
-          </div>
-          {booking.notes && (
-            <div className="mt-3 pt-3 border-t border-slate-100">
-              <p className="text-xs text-slate-500">Notes: {booking.notes}</p>
+              ))}
             </div>
-          )}
+            <div className="mt-3 flex items-center gap-2 text-sm text-slate-600 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+              <span>📱</span>
+              <span>Phone used: <strong className="font-semibold">{booking.guest_phone}</strong></span>
+            </div>
+            <p className="mt-3 text-xs text-slate-500 text-center">
+              Save {isMultiple ? 'these Booking IDs' : 'this Booking ID'} and the phone number above — you need both to check or manage your appointment{isMultiple ? 's' : ''}.
+            </p>
+          </div>
+
+          {/* Appointment details */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+            <p className="text-xs font-semibold text-slate-500 tracking-widest uppercase mb-4">Appointment Details</p>
+            <dl className="space-y-3">
+              <div className="flex justify-between">
+                <dt className="text-sm text-slate-500">Guest</dt>
+                <dd className="text-sm font-medium text-slate-900">{booking.guest_name}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-sm text-slate-500">Date</dt>
+                <dd className="text-sm font-medium text-slate-900">{formattedDate}</dd>
+              </div>
+            </dl>
+            <div className="space-y-3 mt-3 pt-3 border-t border-slate-100">
+              {bookingRows.map(b => (
+                <div key={b.booking_number} className="flex justify-between text-sm">
+                  <div>
+                    <p className="font-medium text-slate-900">{b.service_name}</p>
+                    <p className="text-xs text-slate-500">
+                      {fmtTime(b.start_time)} – {fmtTime(b.end_time)}{b.staff_name ? ` · ${b.staff_name}` : ''}
+                    </p>
+                  </div>
+                  <span className="font-medium text-slate-900 shrink-0">UGX {Number(b.service_price).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between border-t border-slate-100 pt-3 mt-3">
+              <dt className="text-sm font-semibold text-slate-700">Total</dt>
+              <dd className="text-sm font-bold text-slate-900">UGX {totalPrice.toLocaleString()}</dd>
+            </div>
+            {booking.notes && (
+              <div className="mt-3 pt-3 border-t border-slate-100">
+                <p className="text-xs text-slate-500">Notes: {booking.notes}</p>
+              </div>
+            )}
+            <p className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-500">
+              Please note that the prices listed for our services are for plain colours only. Prices may vary depending on your preferred design, nail art, and level of detail. Kindly confirm your design of choice with us for an accurate price quote. 💅✨ Thank you for choosing us! ❤️
+            </p>
+          </div>
         </div>
 
         {/* Actions */}
         <div className="no-print flex gap-3">
-          <PrintButton />
+          <PrintButton captureTargetId="booking-slip" fileName={`booking-${bookingNumber}.png`} />
+        </div>
+        <div className="no-print">
           <Link
             href="/bookings/check"
-            className="flex-1 py-3 rounded-lg border border-slate-200 text-slate-700 text-sm font-medium text-center hover:bg-slate-50"
+            className="block w-full py-3 rounded-lg border border-slate-200 text-slate-700 text-sm font-medium text-center hover:bg-slate-50"
           >
             Manage Booking
           </Link>
