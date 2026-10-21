@@ -90,6 +90,9 @@ export default function CheckBookingClient({ salon }: Props) {
   const [workers,        setWorkers]        = useState<Worker[]>([]);
   const [loadingWorkers, setLoadingWorkers]  = useState(false);
 
+  // Download as image
+  const [downloadingImage, setDownloadingImage] = useState(false);
+
   const handleLookup = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bookingId.trim() || !phone.trim()) return;
@@ -199,6 +202,26 @@ export default function CheckBookingClient({ salon }: Props) {
     setRescheduling(false);
   }, [booking, newDate, newSlot, phone, selectedStaffId]);
 
+  const downloadBookingImage = useCallback(async () => {
+    if (!booking) return;
+    const el = document.getElementById('booking-detail-card');
+    if (!el) return;
+    setDownloadingImage(true);
+    try {
+      const { default: html2canvas } = await import('html2canvas-pro');
+      const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+      const dataUrl = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `booking-${booking.booking_number}.png`;
+      a.click();
+    } catch (err) {
+      console.error('downloadBookingImage error:', err);
+      toast.error('Failed to generate image.');
+    }
+    setDownloadingImage(false);
+  }, [booking]);
+
   const statusInfo = booking
     ? (STATUS_LABELS[booking.status] ?? { label: booking.status, color: 'text-slate-700 bg-slate-50 border-slate-200' })
     : null;
@@ -265,7 +288,7 @@ export default function CheckBookingClient({ salon }: Props) {
         {/* Booking details */}
         {booking && statusInfo && (
           <>
-            <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+            <div id="booking-detail-card" className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-xs font-semibold text-slate-500 tracking-widest uppercase">Booking</p>
                 <span className={`text-xs font-semibold px-2 py-1 rounded-full border ${statusInfo.color}`}>
@@ -305,6 +328,14 @@ export default function CheckBookingClient({ salon }: Props) {
                 </p>
               )}
             </div>
+
+            <button
+              onClick={downloadBookingImage}
+              disabled={downloadingImage}
+              className="w-full py-3 rounded-lg border border-slate-200 text-slate-700 text-sm font-medium disabled:opacity-50"
+            >
+              {downloadingImage ? 'Generating…' : 'Download as Image'}
+            </button>
 
             {/* Action buttons */}
             {(canCancel || canReschedule) && (

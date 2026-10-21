@@ -363,6 +363,10 @@ export default function BookingForm({ salon, initialServices }: Props) {
             <h2 className="text-lg font-semibold text-slate-900 mb-1">Choose Services</h2>
             <p className="text-sm text-slate-500 mb-4">Select one or more — tap to add or remove.</p>
 
+            <p className="text-xs text-slate-500 mb-4">
+              Please note that the prices listed for our services are for plain colours only. Prices may vary depending on your preferred design, nail art, and level of detail. Kindly confirm your design of choice with us for an accurate price quote. 💅✨ Thank you for choosing us! ❤️
+            </p>
+
             {/* Search */}
             <div className="relative mb-4">
               <input
