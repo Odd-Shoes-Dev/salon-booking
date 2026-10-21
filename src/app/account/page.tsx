@@ -34,7 +34,7 @@ export default async function AccountPage() {
   `;
 
   const vouchers = await sql`
-    SELECT code, value, remaining_value, status, expires_at::text, note
+    SELECT code, value, remaining_value, discount_type, status, expires_at::text, note
     FROM coupons
     WHERE salon_id  = ${salon.id}
       AND client_id = ${client.id}

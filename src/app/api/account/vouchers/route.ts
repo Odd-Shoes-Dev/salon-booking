@@ -7,7 +7,7 @@ export async function GET() {
   if (!client) return NextResponse.json({ error: 'Not logged in' }, { status: 401 });
 
   const vouchers = await sql`
-    SELECT code, value, remaining_value, status, expires_at, note, created_at
+    SELECT code, value, remaining_value, discount_type, status, expires_at, note, created_at
     FROM coupons
     WHERE salon_id  = ${client.salon_id}
       AND client_id = ${client.id}
