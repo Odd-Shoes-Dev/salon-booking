@@ -2,7 +2,7 @@
 
 Standalone Next.js 15 app for customer self-booking. Runs separately from the main salon management system and shares the same Neon PostgreSQL database. Booking itself never requires login — an optional phone-OTP **client portal** (see below) lets a returning customer see their booking history and vouchers, and lets a booking be reliably linked to the right client record instead of showing up as a stranger to staff.
 
-**See also:** [domain-routing.md](./domain-routing.md) — URL convention, `NEXT_PUBLIC_ROOT_DOMAIN`, safety redirects, DNS setup.
+**See also:** [domain-routing.md](./domain-routing.md) — URL convention, `NEXT_PUBLIC_ROOT_DOMAIN`, safety redirects, DNS setup. [known-issues.md](./known-issues.md) — deferred bugs/tech debt, including a rate-limiting gap on the booking lookup routes below.
 
 ---
 
