@@ -17,6 +17,21 @@ function fmtTime(t: string): string {
   return `${hour}:${String(m).padStart(2, '0')} ${suffix}`;
 }
 
+// Shown on the booking slip, which is printable/downloadable and may end up
+// shared outside the client's own device — the phone number doubles as the
+// credential for the check-booking page, so only the last 2 digits are kept.
+function maskPhone(phone: string): string {
+  const trimmed = phone.trim();
+  const hasPlus = trimmed.startsWith('+');
+  const digits  = trimmed.replace(/\D/g, '');
+  if (digits.length <= 5) return trimmed;
+  const prefix   = digits.slice(0, 3);
+  const last2    = digits.slice(-2);
+  const maskedCount = digits.length - 3 - 2;
+  const grouped = ('•'.repeat(maskedCount).match(/.{1,3}/g) ?? []).join(' ');
+  return `${hasPlus ? '+' : ''}${prefix} ${grouped} ${last2}`;
+}
+
 export default async function ConfirmationPage({ params, searchParams }: Props) {
   const { bookingNumber } = await params;
   const { also } = await searchParams;
@@ -104,7 +119,7 @@ export default async function ConfirmationPage({ params, searchParams }: Props) 
             </div>
             <div className="mt-3 flex items-center gap-2 text-sm text-slate-600 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
               <span>📱</span>
-              <span>Phone used: <strong className="font-semibold">{booking.guest_phone}</strong></span>
+              <span>Phone used: <strong className="font-semibold">{maskPhone(booking.guest_phone)}</strong></span>
             </div>
             <p className="mt-3 text-xs text-slate-500 text-center">
               Save {isMultiple ? 'these Booking IDs' : 'this Booking ID'} and the phone number above — you need both to check or manage your appointment{isMultiple ? 's' : ''}.
