@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
@@ -26,6 +26,66 @@ function getMinDate(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// Saved progress so a reload, a flaky connection, or an accidental back
+// button doesn't throw away everything the customer already picked.
+const DRAFT_KEY = 'salon_booking_draft_v1';
+
+interface StoredDraft {
+  step: number;
+  date: string;
+  serviceIds: string[];
+  lineChoices: { serviceId: string; workerId: string | null; workerName: string | null; slot: TimeSlot | null }[];
+  name: string;
+  phone: string;
+  notes: string;
+}
+
+interface RestoredDraft {
+  step: Step;
+  date: string;
+  selectedServices: Service[];
+  lines: ServiceLine[];
+  name: string;
+  phone: string;
+  notes: string;
+}
+
+function readDraft(initialServices: Service[]): RestoredDraft | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const draft = JSON.parse(raw) as StoredDraft;
+    const services = draft.serviceIds
+      .map(id => initialServices.find(s => s.id === id))
+      .filter((s): s is Service => !!s);
+    if (services.length === 0) return null;
+
+    // The stored date may now be in the past if the draft is a few days old.
+    const minDate = getMinDate();
+    const date = draft.date && draft.date >= minDate ? draft.date : '';
+
+    const lines: ServiceLine[] = services.map(s => {
+      const lc = draft.lineChoices.find(l => l.serviceId === s.id);
+      return {
+        service: s,
+        worker: date && lc?.workerId ? { id: lc.workerId, name: lc.workerName ?? '' } : null,
+        slot: date ? (lc?.slot ?? null) : null,
+        slots: [],
+        loadingSlots: false,
+      };
+    });
+
+    const step: Step = !date
+      ? (draft.step > 1 ? 2 : 1)
+      : (draft.step >= 1 && draft.step <= 3 ? (draft.step as Step) : 1);
+
+    return { step, date, selectedServices: services, lines, name: draft.name ?? '', phone: draft.phone ?? '', notes: draft.notes ?? '' };
+  } catch {
+    return null;
+  }
+}
+
 function formatDate(iso: string): string {
   return new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
@@ -39,6 +99,10 @@ function fmtTime(t: string): string {
   return `${hour}:${String(m).padStart(2, '0')} ${suffix}`;
 }
 
+function timesOverlap(a: TimeSlot, b: TimeSlot): boolean {
+  return a.startTime < b.endTime && a.endTime > b.startTime;
+}
+
 interface Props {
   salon: Salon;
   initialServices: Service[];
@@ -47,12 +111,23 @@ interface Props {
 export default function BookingForm({ salon, initialServices }: Props) {
   const router = useRouter();
 
+  // Draft restoration (sessionStorage) happens in an effect below, never in
+  // these initial values — reading sessionStorage during the initial render
+  // would make the server's render (no window) disagree with the client's
+  // hydration render (real sessionStorage), which is exactly the "branch on
+  // typeof window" hydration-mismatch pitfall. Every state here starts at
+  // the same plain default on both server and client.
   const [step, setStep] = useState<Step>(1);
 
   const [date, setDate] = useState('');
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [lines, setLines] = useState<ServiceLine[]>([]);
+  // Which service's staff/time picker is currently shown, when there's more
+  // than one — guides the customer through them one at a time instead of
+  // dumping every service's pickers onto the page at once.
+  const [activeLineIdx, setActiveLineIdx] = useState(0);
+  const [closedDays, setClosedDays] = useState<number[]>([]);
 
   const [name,    setName]    = useState('');
   const [phone,   setPhone]   = useState('');
@@ -77,9 +152,66 @@ export default function BookingForm({ salon, initialServices }: Props) {
       .catch(() => {});
   }, []);
 
+  // Which weekdays the salon is structurally closed on, so the calendar can
+  // grey them out instead of letting the customer discover "no slots" only
+  // after picking the date and a staff member.
+  useEffect(() => {
+    fetch('/api/workers/closed-days')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setClosedDays(Array.isArray(d?.closedDays) ? d.closedDays : []))
+      .catch(() => {});
+  }, []);
+
+  // Restore saved progress — only after mount, so this never runs during
+  // server rendering and can't disagree with what the server sent down.
+  useEffect(() => {
+    const restored = readDraft(initialServices);
+    if (!restored) return;
+    setStep(restored.step);
+    setDate(restored.date);
+    setSelectedServices(restored.selectedServices);
+    setLines(restored.lines);
+    // A faster-resolving logged-in-identity fetch (above) should win if it
+    // beats this to setting name/phone — unlikely, but cheap to guard.
+    setName(prev => prev || restored.name);
+    setPhone(prev => prev || restored.phone);
+    setNotes(prev => prev || restored.notes);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Save progress as the customer goes, so a reload or a dropped connection
+  // doesn't throw away everything they already picked. Skips its very first
+  // run so it can never race the restore effect above and overwrite a saved
+  // draft with the pre-restore empty state.
+  const skippedFirstSave = useRef(false);
+  useEffect(() => {
+    if (!skippedFirstSave.current) { skippedFirstSave.current = true; return; }
+    if (selectedServices.length === 0) {
+      sessionStorage.removeItem(DRAFT_KEY);
+      return;
+    }
+    const toSave: StoredDraft = {
+      step,
+      date,
+      serviceIds: selectedServices.map(s => s.id),
+      lineChoices: lines.map(l => ({
+        serviceId: l.service.id,
+        workerId: l.worker?.id ?? null,
+        workerName: l.worker?.name ?? null,
+        slot: l.slot,
+      })),
+      name,
+      phone,
+      notes,
+    };
+    try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(toSave)); } catch {}
+  }, [step, date, selectedServices, lines, name, phone, notes]);
+
   // Service search / filter
   const [serviceSearch,  setServiceSearch]  = useState('');
   const [activeCategory, setActiveCategory] = useState('');
+  // Expands the floating cart bar into a removable list of what's selected.
+  const [cartOpen, setCartOpen] = useState(false);
 
   // Inline calendar navigation
   const [calYear,  setCalYear]  = useState(() => new Date(getMinDate() + 'T12:00:00').getFullYear());
@@ -167,6 +299,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
   const onPickDate = (iso: string) => {
     setDate(iso);
     setLines(prev => prev.map(l => ({ ...l, worker: null, slot: null, slots: [] })));
+    setActiveLineIdx(0);
   };
 
   // Fetch workers once per date (shared across all service lines)
@@ -200,6 +333,27 @@ export default function BookingForm({ salon, initialServices }: Props) {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, date, lineDeps]);
+
+  // If picking the same staff for two services on this date, the slot list
+  // for one doesn't know about an in-progress (not-yet-submitted) pick for
+  // the other — so if going back and changing an earlier service's time
+  // creates an overlap with a later one already chosen, clear that later
+  // pick instead of silently letting it through to a submit-time rejection.
+  useEffect(() => {
+    lines.forEach((l, i) => {
+      if (!l.slot || !l.worker) return;
+      // Only clear the later service of a conflicting pair — deterministic
+      // regardless of which one the customer just edited.
+      const conflictsWithEarlier = lines.some((other, j) =>
+        j < i && other.worker?.id === l.worker!.id && other.slot && timesOverlap(l.slot!, other.slot)
+      );
+      if (conflictsWithEarlier) {
+        toast.error(`${l.service.name}'s time now conflicts with another service using ${l.worker!.name} — please pick a new time.`);
+        setLines(prev => prev.map((pl, pi) => pi === i ? { ...pl, slot: null } : pl));
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines]);
 
   const allLinesReady = lines.length > 0 && lines.every(l => l.slot);
 
@@ -237,6 +391,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
       if (!res.ok) { toast.error(data.error ?? 'Failed to create booking.'); setLoading(false); return; }
       const numbers: string[] = data.bookingNumbers ?? (data.bookingNumber ? [data.bookingNumber] : []);
       if (numbers.length === 0) { toast.error('Booking created but no reference was returned.'); setLoading(false); return; }
+      try { sessionStorage.removeItem(DRAFT_KEY); } catch {}
       const [first, ...rest] = numbers;
       const qs = rest.length > 0 ? `?also=${rest.join(',')}` : '';
       router.push(`/booking/confirmation/${first}${qs}`);
@@ -347,7 +502,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
                   ${s === step ? 'bg-[var(--brand)] text-white' : s < step ? 'bg-slate-200 text-slate-600' : 'bg-slate-100 text-slate-400'}`}>
                   {s < step ? '✓' : s}
                 </span>
-                <span className="hidden sm:inline">{label}</span>
+                <span>{label}</span>
                 {i < 2 && <span className="text-slate-200 ml-1">›</span>}
               </div>
             );
@@ -355,7 +510,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
         </div>
       </div>
 
-      <div className={`max-w-lg mx-auto px-4 py-6 ${step === 1 && selectedServices.length > 0 ? 'pb-28' : ''}`}>
+      <div className={`max-w-lg mx-auto px-4 py-6 ${step === 1 && selectedServices.length > 0 ? (cartOpen ? 'pb-96' : 'pb-28') : ''}`}>
 
         {/* ── Step 1: Services (multi-select cart) ─────────────────────────── */}
         {step === 1 && (
@@ -505,13 +660,15 @@ export default function BookingForm({ salon, initialServices }: Props) {
               <div className="grid grid-cols-7 gap-y-1">
                 {calDays.map((iso, idx) => {
                   if (!iso) return <div key={`pad-${idx}`} />;
-                  const disabled = iso < minDate;
+                  const closed   = closedDays.includes(new Date(iso + 'T12:00:00').getDay());
+                  const disabled = iso < minDate || closed;
                   const selected = iso === date;
                   return (
                     <button
                       key={iso}
                       disabled={disabled}
                       onClick={() => onPickDate(iso)}
+                      title={closed && iso >= minDate ? 'Closed' : undefined}
                       className={`mx-auto w-9 h-9 rounded-full text-sm flex items-center justify-center transition-colors select-none
                         ${selected
                           ? 'bg-[var(--brand)] text-white font-semibold'
@@ -524,70 +681,134 @@ export default function BookingForm({ salon, initialServices }: Props) {
                   );
                 })}
               </div>
-              {date && (
+              {date ? (
                 <p className="mt-3 pt-3 border-t border-slate-100 text-xs text-center text-slate-500">{formatDate(date)}</p>
-              )}
+              ) : closedDays.length > 0 ? (
+                <p className="mt-3 pt-3 border-t border-slate-100 text-xs text-center text-slate-400">Greyed-out days are closed.</p>
+              ) : null}
             </div>
 
-            {/* Per-service staff + time pickers */}
-            {date && lines.map((line, idx) => (
-              <div key={line.service.id} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-                <h2 className="text-sm font-semibold text-slate-700 mb-1">{line.service.name}</h2>
-                <p className="text-xs text-slate-400 mb-4">{line.service.duration_minutes} min · UGX {Number(line.service.price).toLocaleString()}</p>
-
-                <p className="text-xs font-medium text-slate-500 mb-2">Staff</p>
-                {loadingWorkers ? (
-                  <div className="flex gap-2 flex-wrap mb-4">
-                    {[1, 2, 3].map(i => <div key={i} className="h-9 w-24 rounded-lg bg-slate-100 animate-pulse" />)}
-                  </div>
-                ) : (
-                  <div className="flex gap-2 flex-wrap mb-4">
-                    <button
-                      onClick={() => setLineWorker(idx, null)}
-                      className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors
-                        ${line.worker === null ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
-                    >Any Staff</button>
-                    {workers.map(w => (
-                      <button
-                        key={w.id}
-                        onClick={() => setLineWorker(idx, w)}
-                        className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors
-                          ${line.worker?.id === w.id ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
-                      >{w.name}</button>
-                    ))}
-                    {workers.length === 0 && (
-                      <p className="text-sm text-slate-500">No staff available on this day.</p>
-                    )}
-                  </div>
-                )}
-
-                <p className="text-xs font-medium text-slate-500 mb-2">
-                  Time{line.worker && <span className="font-normal text-slate-400"> · {line.worker.name}</span>}
+            {/* Per-service progress — only shown when there's more than one
+                service, so a single-service booking looks exactly as before. */}
+            {date && lines.length > 1 && (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+                <p className="text-xs text-slate-500 mb-3 text-center">
+                  Choose a staff member and time for each service, one at a time.
                 </p>
-                {line.loadingSlots ? (
-                  <div className="grid grid-cols-3 gap-2">
-                    {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="h-10 rounded-lg bg-slate-100 animate-pulse" />)}
-                  </div>
-                ) : line.slots.length === 0 ? (
-                  <p className="text-sm text-slate-500 py-1">
-                    No times available{line.worker ? ` for ${line.worker.name}` : ''} on this date. Try a different date or staff member.
-                  </p>
-                ) : (
-                  <div className="grid grid-cols-3 gap-2">
-                    {line.slots.map(s => (
-                      <button
-                        key={s.startTime}
-                        onClick={() => setLineSlot(idx, s)}
-                        className={`py-2.5 rounded-lg border text-sm font-medium transition-colors
-                          ${line.slot?.startTime === s.startTime
-                            ? 'bg-[var(--brand)] text-white border-[var(--brand)]'
-                            : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
-                      >{fmtTime(s.startTime)}</button>
-                    ))}
-                  </div>
-                )}
+                <div className="flex items-center justify-center gap-2">
+                  {lines.map((l, i) => (
+                    <button
+                      key={l.service.id}
+                      onClick={() => setActiveLineIdx(i)}
+                      title={l.service.name}
+                      className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors
+                        ${i === activeLineIdx
+                          ? 'bg-[var(--brand)] text-white'
+                          : l.slot ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}
+                    >
+                      {l.slot ? '✓' : i + 1}
+                    </button>
+                  ))}
+                </div>
               </div>
-            ))}
+            )}
+
+            {/* Staff + time picker — shows only the active service when
+                there's more than one, guiding the customer through them one
+                at a time instead of dumping every picker on the page. */}
+            {date && lines.length > 0 && (() => {
+              const idx  = lines.length > 1 ? activeLineIdx : 0;
+              const line = lines[idx];
+              // Hide times that would double-book the same staff member
+              // against an earlier service already scheduled in this booking
+              // — the backend blocks it anyway, this just avoids offering it.
+              const visibleSlots = line.worker
+                ? line.slots.filter(s => !lines.some((other, j) =>
+                    j < idx && other.worker?.id === line.worker!.id && other.slot && timesOverlap(s, other.slot)
+                  ))
+                : line.slots;
+              return (
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+                  <h2 className="text-sm font-semibold text-slate-700 mb-1">
+                    {lines.length > 1 ? `Service ${idx + 1} of ${lines.length}: ${line.service.name}` : line.service.name}
+                  </h2>
+                  <p className="text-xs text-slate-400 mb-4">{line.service.duration_minutes} min · UGX {Number(line.service.price).toLocaleString()}</p>
+
+                  <p className="text-xs font-medium text-slate-500 mb-1">Staff</p>
+                  <p className="text-xs text-slate-400 mb-2">Pick someone specific, or choose &quot;Any Staff&quot; and we&apos;ll assign whoever&apos;s free.</p>
+                  {loadingWorkers ? (
+                    <div className="flex gap-2 flex-wrap mb-4">
+                      {[1, 2, 3].map(i => <div key={i} className="h-9 w-24 rounded-lg bg-slate-100 animate-pulse" />)}
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 flex-wrap mb-4">
+                      <button
+                        onClick={() => setLineWorker(idx, null)}
+                        className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors
+                          ${line.worker === null ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
+                      >Any Staff</button>
+                      {workers.map(w => (
+                        <button
+                          key={w.id}
+                          onClick={() => setLineWorker(idx, w)}
+                          className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors
+                            ${line.worker?.id === w.id ? 'bg-[var(--brand)] text-white border-[var(--brand)]' : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
+                        >{w.name}</button>
+                      ))}
+                      {workers.length === 0 && (
+                        <p className="text-sm text-slate-500">No staff available on this day.</p>
+                      )}
+                    </div>
+                  )}
+
+                  <p className="text-xs font-medium text-slate-500 mb-2">
+                    Time{line.worker && <span className="font-normal text-slate-400"> · {line.worker.name}</span>}
+                  </p>
+                  {line.loadingSlots ? (
+                    <div className="grid grid-cols-3 gap-2">
+                      {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="h-10 rounded-lg bg-slate-100 animate-pulse" />)}
+                    </div>
+                  ) : visibleSlots.length === 0 ? (
+                    <p className="text-sm text-slate-500 py-1">
+                      {line.slots.length > 0 && line.worker
+                        ? `${line.worker.name} is already booked for another service in this visit at every remaining time. Try a different staff member or date.`
+                        : `No times available${line.worker ? ` for ${line.worker.name}` : ''} on this date. Try a different date or staff member.`}
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2">
+                      {visibleSlots.map(s => (
+                        <button
+                          key={s.startTime}
+                          onClick={() => setLineSlot(idx, s)}
+                          className={`py-2.5 rounded-lg border text-sm font-medium transition-colors
+                            ${line.slot?.startTime === s.startTime
+                              ? 'bg-[var(--brand)] text-white border-[var(--brand)]'
+                              : 'border-slate-200 text-slate-700 hover:border-slate-300'}`}
+                        >{fmtTime(s.startTime)}</button>
+                      ))}
+                    </div>
+                  )}
+
+                  {lines.length > 1 && (
+                    <div className="flex gap-3 mt-4 pt-4 border-t border-slate-100">
+                      {idx > 0 && (
+                        <button
+                          onClick={() => setActiveLineIdx(idx - 1)}
+                          className="flex-1 py-2.5 rounded-lg border border-slate-200 text-slate-700 text-sm font-medium"
+                        >‹ Previous</button>
+                      )}
+                      {idx < lines.length - 1 && (
+                        <button
+                          onClick={() => setActiveLineIdx(idx + 1)}
+                          disabled={!line.slot}
+                          className="flex-1 py-2.5 rounded-lg bg-[var(--brand)] text-white text-sm font-medium disabled:opacity-40"
+                        >Next Service ›</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Advance once date + every service has a time */}
             {date && allLinesReady && (
@@ -748,20 +969,50 @@ export default function BookingForm({ salon, initialServices }: Props) {
         )}
       </div>
 
-      {/* Floating cart bar — step 1 only, once at least one service is picked */}
+      {/* Floating cart bar — step 1 only, once at least one service is picked.
+          Tapping the summary expands it into the actual list, so reviewing
+          or removing a pick doesn't mean hunting back through the grid. */}
       {step === 1 && selectedServices.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-4 py-3 z-10">
-          <div className="max-w-lg mx-auto flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold text-slate-900">
-                {selectedServices.length} service{selectedServices.length > 1 ? 's' : ''} selected
-              </p>
-              <p className="text-xs text-slate-500">{totalDuration} min · UGX {totalPrice.toLocaleString()}</p>
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-10">
+          <div className="max-w-lg mx-auto">
+            {cartOpen && (
+              <div className="max-h-56 overflow-y-auto px-4 pt-2 divide-y divide-slate-100 border-b border-slate-100">
+                {selectedServices.map(s => (
+                  <div key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                    <div className="min-w-0">
+                      <p className="font-medium text-slate-900 truncate">{s.name}</p>
+                      <p className="text-xs text-slate-400">{s.duration_minutes} min · UGX {Number(s.price).toLocaleString()}</p>
+                    </div>
+                    <button
+                      onClick={() => toggleService(s)}
+                      aria-label={`Remove ${s.name}`}
+                      className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-4 px-4 py-3">
+              <button onClick={() => setCartOpen(o => !o)} className="flex items-center gap-1.5 text-left">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900 flex items-center gap-1">
+                    {selectedServices.length} service{selectedServices.length > 1 ? 's' : ''} selected
+                    <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform ${cartOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </p>
+                  <p className="text-xs text-slate-500">{totalDuration} min · UGX {totalPrice.toLocaleString()}</p>
+                </div>
+              </button>
+              <button
+                onClick={() => { setCartOpen(false); setStep(2); }}
+                className="px-6 py-2.5 rounded-lg bg-[var(--brand)] text-white text-sm font-medium shrink-0"
+              >Continue →</button>
             </div>
-            <button
-              onClick={() => setStep(2)}
-              className="px-6 py-2.5 rounded-lg bg-[var(--brand)] text-white text-sm font-medium shrink-0"
-            >Continue →</button>
           </div>
         </div>
       )}
