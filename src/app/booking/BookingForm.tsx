@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import type { Salon, Service } from '@/types';
+import { CLIENT_PORTAL_VISIBLE } from '@/lib/featureFlags';
 
 interface Worker   { id: string; name: string }
 interface TimeSlot { startTime: string; endTime: string }
@@ -479,12 +480,14 @@ export default function BookingForm({ salon, initialServices }: Props) {
               </Link>
             </div>
           </div>
-          <Link
-            href={loggedIn ? '/account' : '/account/login'}
-            className="text-sm text-[var(--brand)] font-medium shrink-0"
-          >
-            {loggedIn ? 'My Account' : 'Log In'}
-          </Link>
+          {CLIENT_PORTAL_VISIBLE && (
+            <Link
+              href={loggedIn ? '/account' : '/account/login'}
+              className="text-sm text-[var(--brand)] font-medium shrink-0"
+            >
+              {loggedIn ? 'My Account' : 'Log In'}
+            </Link>
+          )}
         </div>
       </div>
 
@@ -516,7 +519,7 @@ export default function BookingForm({ salon, initialServices }: Props) {
         {step === 1 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
             <h2 className="text-lg font-semibold text-slate-900 mb-1">Choose Services</h2>
-            <p className="text-sm text-slate-500 mb-4">Select one or more — tap to add or remove.</p>
+            <p className="text-sm text-slate-500 mb-4">Select the services you'd like — you can choose more than one.</p>
 
             <p className="text-xs text-slate-500 mb-4">
               Please note that the prices listed for our services are for plain colours only. Prices may vary depending on your preferred design, nail art, and level of detail. Kindly confirm your design of choice with us for an accurate price quote. 💅✨ Thank you for choosing us! ❤️
@@ -735,7 +738,8 @@ export default function BookingForm({ salon, initialServices }: Props) {
                   <p className="text-xs text-slate-400 mb-4">{line.service.duration_minutes} min · UGX {Number(line.service.price).toLocaleString()}</p>
 
                   <p className="text-xs font-medium text-slate-500 mb-1">Staff</p>
-                  <p className="text-xs text-slate-400 mb-2">Pick someone specific, or choose &quot;Any Staff&quot; and we&apos;ll assign whoever&apos;s free.</p>
+                  <p className="text-xs text-slate-400 mb-1">Pick someone specific, or choose &quot;Any Staff&quot; and we&apos;ll assign whoever&apos;s free.</p>
+                  <p className="text-xs text-slate-400 mb-2">Don&apos;t see someone you were expecting? They may not be working that day — try a different date.</p>
                   {loadingWorkers ? (
                     <div className="flex gap-2 flex-wrap mb-4">
                       {[1, 2, 3].map(i => <div key={i} className="h-9 w-24 rounded-lg bg-slate-100 animate-pulse" />)}

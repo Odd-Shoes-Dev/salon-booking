@@ -57,6 +57,10 @@ export async function getAvailableSlots(
     WHERE w.salon_id  = ${salonId}
       AND w.is_active = true
       AND (${staffId ?? null}::uuid IS NULL OR w.id = ${staffId ?? null}::uuid)
+      AND w.id NOT IN (
+        SELECT staff_id FROM staff_time_off
+        WHERE salon_id = ${salonId} AND ${date}::date BETWEEN start_date AND end_date
+      )
   `;
 
   const toMin = (t: string) => {
