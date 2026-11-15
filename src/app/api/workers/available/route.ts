@@ -34,6 +34,10 @@ export async function GET(request: NextRequest) {
         AND ss.salon_id    = ${salon.id}
         AND ss.day_of_week = ${dayOfWeek}
         AND ss.is_available = true
+        AND w.id NOT IN (
+          SELECT staff_id FROM staff_time_off
+          WHERE salon_id = ${salon.id} AND ${date}::date BETWEEN start_date AND end_date
+        )
       ORDER BY w.name
     `;
 
@@ -42,6 +46,10 @@ export async function GET(request: NextRequest) {
       workers = await sql`
         SELECT id, name FROM workers
         WHERE salon_id = ${salon.id} AND is_active = true
+          AND id NOT IN (
+            SELECT staff_id FROM staff_time_off
+            WHERE salon_id = ${salon.id} AND ${date}::date BETWEEN start_date AND end_date
+          )
         ORDER BY name
       `;
     }

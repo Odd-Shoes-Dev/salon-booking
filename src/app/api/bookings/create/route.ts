@@ -4,6 +4,7 @@ import { getSalonByDomain, getSalonBySubdomain } from '@/lib/tenants';
 import { generateBookingNumber } from '@/lib/slots';
 import { sendBookingConfirmationSms, sendNewBookingAlertSms } from '@/lib/sms';
 import { getCurrentClient } from '@/lib/auth';
+import { REQUIRE_PHONE_VERIFICATION } from '@/lib/featureFlags';
 
 interface ServiceLine {
   service_id: string;
@@ -67,10 +68,10 @@ export async function POST(request: NextRequest) {
         WHERE salon_id = ${salon.id} AND phone = ${guest_phone.trim()} AND is_active = true
       `;
       if (matchedClient) {
-        if (!skipVerification) {
+        if (REQUIRE_PHONE_VERIFICATION && !skipVerification) {
           return NextResponse.json({ requiresVerification: true });
         }
-        clientId = null; // explicitly chose to continue without linking
+        clientId = null; // unverified (or verification currently disabled) — stays unlinked
       } else {
         let registrationBranchId: string | null = null;
         const [firstBranch] = await sql`
