@@ -78,7 +78,7 @@ export default async function ConfirmationPage({ params, searchParams }: Props) 
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
       <div className="bg-white border-b border-slate-200 px-4 py-4 no-print">
-        <div className="max-w-lg mx-auto flex items-center gap-3">
+        <Link href="/booking" className="max-w-lg mx-auto flex items-center gap-3">
           {salon.logo_url && (
             <img
               src={salon.logo_url}
@@ -87,7 +87,7 @@ export default async function ConfirmationPage({ params, searchParams }: Props) 
             />
           )}
           <h1 className="text-xl font-semibold text-slate-900">{salon.name}</h1>
-        </div>
+        </Link>
       </div>
 
       <div className="max-w-lg mx-auto px-4 py-6 space-y-4">
@@ -173,12 +173,36 @@ export default async function ConfirmationPage({ params, searchParams }: Props) 
         </div>
         <div className="no-print">
           <Link
+            href="/booking"
+            className="block w-full py-3 rounded-lg bg-[var(--brand)] text-white text-sm font-medium text-center hover:opacity-90 transition-opacity"
+          >
+            Book Another Appointment
+          </Link>
+        </div>
+        <div className="no-print">
+          <Link
             href="/bookings/check"
             className="block w-full py-3 rounded-lg border border-slate-200 text-slate-700 text-sm font-medium text-center hover:bg-slate-50"
           >
             Manage Booking
           </Link>
         </div>
+
+        {salon.google_review_url && (
+          <div className="no-print bg-white rounded-xl shadow-sm border border-slate-100 p-5 text-center">
+            <p className="text-sm font-semibold text-slate-900">⭐ Been to {salon.name} before?</p>
+            <p className="text-xs text-slate-500 mt-1 mb-3">Share your experience with a quick Google review.</p>
+            <a
+              href={salon.google_review_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-sm hover:opacity-90 transition-opacity"
+              style={{ backgroundColor: 'var(--brand)' }}
+            >
+              Leave a review
+            </a>
+          </div>
+        )}
 
         {salon.phone && (
           <p className="text-center text-sm text-slate-500 no-print">

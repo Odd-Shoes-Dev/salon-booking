@@ -10,6 +10,7 @@ export interface Salon {
   city: string;
   logo_url?: string;
   slogan?: string;
+  google_review_url?: string | null;
   subdomain: string;
   custom_domain?: string;
   theme_primary_color: string;

@@ -3,6 +3,8 @@ import { headers } from 'next/headers';
 import { Toaster } from 'react-hot-toast';
 import { getSalonByDomain, getSalonBySubdomain } from '@/lib/tenants';
 import type { Salon } from '@/types';
+import SiteFooter from '@/components/SiteFooter';
+import ReviewPopup from '@/components/ReviewPopup';
 import '../styles/globals.css';
 
 export const metadata: Metadata = { title: 'Book an Appointment' };
@@ -47,6 +49,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       </head>
       <body>
         {children}
+        <SiteFooter reviewUrl={salon?.google_review_url} />
+        <ReviewPopup reviewUrl={salon?.google_review_url} salonName={salon?.name ?? 'us'} />
         <Toaster position="top-center" />
       </body>
     </html>

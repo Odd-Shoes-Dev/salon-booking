@@ -120,6 +120,14 @@ export default function BookingForm({ salon, initialServices }: Props) {
   // the same plain default on both server and client.
   const [step, setStep] = useState<Step>(1);
 
+  // The browser's own scroll-restoration tries to put the page back wherever
+  // it was last scrolled on reload — since this is a single URL for the
+  // whole flow, that can land a fresh load at the bottom of a much shorter
+  // step's content.
+  useEffect(() => {
+    try { window.history.scrollRestoration = 'manual'; } catch {}
+  }, []);
+
   const [date, setDate] = useState('');
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -129,6 +137,17 @@ export default function BookingForm({ salon, initialServices }: Props) {
   // dumping every service's pickers onto the page at once.
   const [activeLineIdx, setActiveLineIdx] = useState(0);
   const [closedDays, setClosedDays] = useState<number[]>([]);
+
+  // Steps (and, within step 2, services) are swapped in place via state, not
+  // navigation, so nothing else resets scroll between them — a customer
+  // scrolled down on a taller step can otherwise land mid/bottom of a
+  // shorter one right after advancing.
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [step]);
+  useEffect(() => {
+    if (step === 2) window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [step, activeLineIdx]);
 
   const [name,    setName]    = useState('');
   const [phone,   setPhone]   = useState('');
